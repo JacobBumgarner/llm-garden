@@ -1,0 +1,8 @@
+{
+  "name": "plan-session",
+  "description": "Run a structured planning session that converges on a self-contained implementation plan a second agent can execute.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Jacob Bumgarner"
+  }
+}
