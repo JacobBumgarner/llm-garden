@@ -1,0 +1,16 @@
+{
+  "name": "llm-garden",
+  "owner": {
+    "name": "Jacob Bumgarner",
+    "url": "https://github.com/JacobBumgarner"
+  },
+  "description": "Jacob Bumgarner's Claude Code skills.",
+  "plugins": [
+    {
+      "name": "plan-session",
+      "source": "./plugins/plan-session",
+      "description": "Run a structured planning session that converges on a self-contained implementation plan a second agent can execute.",
+      "version": "0.1.0"
+    }
+  ]
+}
