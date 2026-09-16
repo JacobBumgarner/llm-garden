@@ -1,28 +1,35 @@
 ---
 name: commit-flow
-description: Review the working-tree diff, propose a table of commit groups, and stage them one group at a time so the user writes each message and commits. Use when the user asks to "commit-flow", "group my changes into commits", "help me commit this work", or wants to break a diff into clean commits.
+description: Read the working-tree diff and the plan doc, propose a draft plan of commit groups, and stage them one group at a time so the user writes each message and commits. Re-syncs the plan when the user revises code mid-flow. Use when the user asks to "commit-flow", "group my changes into commits", "help me commit this work", or wants to break a diff into clean commits.
 ---
 
 # Commit Flow
 
 Turn a pile of working-tree changes into a sequence of clean commits. The agent
-reads the diff and proposes groups of files. Each group is one commit. The agent
-stages one group at a time. The user reviews the staged files in their IDE,
-writes the commit message, and commits.
+reads the diff, reads the plan doc behind the work, and proposes groups of
+files. Each group is one commit, and each carries a ready `git add` line. The
+user runs the line, reviews the staged files in their IDE, writes the commit
+message, and commits, then moves to the next group.
 
 This skill keeps the user's structural model of the repo sharp. Small commits
 with clear boundaries tell the user which files hold which components and what
 each module does.
 
+The first proposal is a draft. The user often reviews the diff, asks agents to
+make changes, then comes back. The work happens in one session, so the agent
+already holds the draft plan in context. On return, the agent re-reads the tree
+and re-syncs the plan against it. No plan file is written to disk.
+
 ## Roles
 
-- **The agent stages.** It runs `git add` on the files for one group.
+- **Staging.** Each commit section carries a `git add` line. The user runs it,
+  or asks the agent to stage that group. One group at a time.
 - **The user commits.** The user writes every commit message and runs the
   commit. The agent never writes a message and never commits.
 
 ## Steps
 
-### Step 1: Read the diff
+### Step 1: Read the diff and the plan
 
 Look at the full working tree before proposing anything.
 
@@ -33,6 +40,18 @@ Look at the full working tree before proposing anything.
 
 If files are already staged, note it. Fold them into the group proposal instead
 of ignoring them.
+
+Then read the plan doc behind the work. Most changes here start from a plan
+file. It carries the intent the raw diff can't show: why these files changed
+together, which change belongs to which task, what's a follow-up. Use it to
+group by intent and to write sharper descriptions.
+
+- Look for the plan doc first. Check `plan/`, `plans/`, and `tmp/` for a recent
+  markdown plan, and check this session's context in case the plan was written
+  here.
+- If one plan doc is the obvious match, read it.
+- If none turns up, or several could match, ask the user to point at the plan
+  doc. If there's genuinely no plan, say so and group from the diff alone.
 
 ### Step 2: Propose commit groups
 
@@ -49,8 +68,9 @@ them, dependencies first. Source and docs come first. Tests come last.
 | 3 | Unit tests for the batch iterator |
 
 Then, one section per commit. Each section has a bold heading, a bulleted list
-of the files, and a short description of the change. List each file on its own
-bullet. Backtick every path so code files are easy to spot.
+of the files, a short description of the change, and a `git add` line that stages
+exactly those files. List each file on its own bullet. Backtick every path so
+code files are easy to spot.
 
 **Commit 1 — Stream the feature pipeline in batches**
 
@@ -60,12 +80,19 @@ bullet. Backtick every path so code files are easy to spot.
 
 Rework the feature pipeline to stream batches from the loader instead of holding
 the whole frame in memory. `transforms.py` moves to lazy column ops, and
-`config.py` adds the `--batch-size` flag.
+`loader.py` yields batches the pipeline pulls on demand.
+
+```
+git add src/delphi/features/pipeline.py src/delphi/features/transforms.py src/delphi/io/loader.py
+```
 
 Rules for the proposal:
 
 - **Group by intent.** Files that make one logical change go in one commit.
   Don't mix unrelated changes. Ask if unsure.
+- **End each section with a `git add` line.** List that commit's exact paths in a
+  fenced code block so the user can copy and run it. Same paths as the bullets,
+  no more, no less.
 - **Tests commit last, in their own commits.** Source and docs commit first.
   Then the tests, never mixed with the source they cover.
 - **Split tests by type.** Unit, integration, and nightly tests each get their
@@ -84,25 +111,45 @@ Rules for the proposal:
 After the proposal, stop and wait. The user may merge commits, split them, or
 reorder. Adjust until they approve.
 
-### Step 3: Stage the first group
+### Step 3: Hand off the first group
 
-On approval, stage only the first commit's files with `git add`. Nothing else.
+On approval, point the user at the first commit's `git add` line. They run it,
+review the staged files in their IDE, write the message, and commit. If the user
+would rather the agent stage, run `git add` on that commit's exact paths. Either
+way, stage only one group at a time.
 
-Then tell the user the group is staged and name the files. Hand off:
+> Commit 1 is ready. Run its `git add` line, review in your IDE, write your
+> message, and commit. Tell me when you're on to the next group.
 
-> Commit 1 is staged: `src/delphi/features/pipeline.py`,
-> `src/delphi/features/transforms.py`, `src/delphi/io/loader.py`. Review it in
-> your IDE, write your message, and commit. Tell me when to stage the next
-> group.
-
-### Step 4: Stage the next group
+### Step 4: Move to the next group
 
 When the user says to continue, first confirm the previous group is committed.
 Run `git status --porcelain`. If the last group's files still show as staged or
 modified, say so and wait. Don't stack two groups in the index.
 
-Once the tree is clean of the last group, stage the next one and hand off again.
-Repeat until every group is committed.
+Once the tree is clean of the last group, point the user at the next commit's
+`git add` line (or stage it on request) and hand off again. Repeat until every
+group is committed.
+
+### Step 5: Re-sync the plan after revisions
+
+The user often reviews the draft, asks agents to change the code, then returns
+to keep committing. The tree has moved since the draft. Re-sync before staging
+anything more.
+
+The draft plan is already in the session context, so this is a file-set
+reconciliation, not a fresh start. Re-run `git status --porcelain` and
+`git diff`, then compare the current changed files against the draft:
+
+- **Still changed, already grouped** → keep it in its commit.
+- **Changed now, not in the plan** → new file. Propose a commit for it, or add
+  it to a fitting group. Flag it as new.
+- **In the plan, no longer changed** → already committed, or reverted. Mark it
+  done or drop it.
+
+Refresh the descriptions from the current `git diff`, and re-read the plan doc
+if the work grew past it. Re-present the updated plan, calling out what changed
+since the draft. Then continue staging.
 
 ## Guidelines
 
@@ -112,8 +159,8 @@ Repeat until every group is committed.
   `git add .` or `git add -A`.
 - **Handle deletes and renames.** `git add` stages a deletion. A rename is the
   old path and the new path. Include both.
-- **Re-read on drift.** If the working tree changed since the proposal (the user
-  edited a file, a group turned out wrong), re-run `git status` and update the
-  table before staging.
+- **Re-sync on drift.** If the tree changed since the proposal, the user edited
+  a file, or a group turned out wrong, re-sync the plan per Step 5 before
+  staging.
 - **Don't commit.** Even if the user seems to want it, confirm before running
   `git commit`. The default is that the user commits.
