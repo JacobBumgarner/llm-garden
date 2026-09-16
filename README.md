@@ -5,8 +5,7 @@ for building software with LLMs.
 ## Claude Code skills
 
 This repo doubles as a [Claude Code plugin
-marketplace](https://code.claude.com/docs/en/plugin-marketplaces) (`llm-garden`).
-Install once per machine, then pull updates with a single command.
+marketplace](https://code.claude.com/docs/en/plugin-marketplaces) (`llm-garden`) and a collection of agent prompts.
 
 ### Install
 
