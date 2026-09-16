@@ -11,6 +11,12 @@
       "source": "./plugins/plan-session",
       "description": "Run a structured planning session that converges on a self-contained implementation plan a second agent can execute.",
       "version": "0.1.0"
+    },
+    {
+      "name": "commit-flow",
+      "source": "./plugins/commit-flow",
+      "description": "Group working-tree changes into logical commits, then stage them one at a time so you write the message and commit.",
+      "version": "0.1.0"
     }
   ]
 }

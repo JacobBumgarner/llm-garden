@@ -32,5 +32,6 @@ plan-session@llm-garden` to force one plugin).
 | Plugin | Contents | Details |
 | --- | --- | --- |
 | `plan-session` | `skill` | Runs a structured planning session to create a self-contained implementation plan. Requires multiple iterations with new agents to converge on a plan. Creates a staged build plan for downstream agents. |
+| `commit-flow` | `skill` | Reviews the working-tree diffs and proposes a group of logical commits with descriptions. Designed to ensure LLM code organization is tracked by a human. |
 
 
