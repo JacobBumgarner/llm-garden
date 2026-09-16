@@ -12,11 +12,11 @@ Install once per machine, then pull updates with a single command.
 
 ```
 /plugin marketplace add JacobBumgarner/llm-garden
-/plugin install plan-session@llm-garden
+/plugin install orchestrate@llm-garden
 ```
 
-After install, the `plan-session` skill is available in every project on that
-machine. Start it with `/plan-session` or by asking to plan something.
+After install, the `orchestrate` skill is available in every project on that
+machine. Start it with `/orchestrate` or by asking to plan something.
 
 ### Update
 
@@ -25,13 +25,13 @@ machine. Start it with `/plan-session` or by asking to plan something.
 ```
 
 Installed plugins pick up the new commit (or run `/plugin update
-plan-session@llm-garden` to force one plugin).
+orchestrate@llm-garden` to force one plugin).
 
 ### Marketplace
 
 | Plugin | Contents | Details |
 | --- | --- | --- |
-| `plan-session` | `skill` | Runs a structured planning session to create a self-contained implementation plan. Requires multiple iterations with new agents to converge on a plan. Creates a staged build plan for downstream agents. |
+| `orchestrate` | `skill` | Central-agent workflow across three gated groups: discovery (Q&A plus viability spikes), plan (draft, multi-model review, finalize), and build (delegate staged implementation and cleanup to subagents). Produces a self-contained, staged plan. |
 | `commit-flow` | `skill` | Reviews the working-tree diffs and proposes a group of logical commits with descriptions. Designed to ensure LLM code organization is tracked by a human. |
 
 

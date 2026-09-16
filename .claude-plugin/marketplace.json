@@ -7,10 +7,10 @@
   "description": "Jacob Bumgarner's Claude Code skills.",
   "plugins": [
     {
-      "name": "plan-session",
-      "source": "./plugins/plan-session",
-      "description": "Run a structured planning session that converges on a self-contained implementation plan a second agent can execute.",
-      "version": "0.1.0"
+      "name": "orchestrate",
+      "source": "./plugins/orchestrate",
+      "description": "Orchestrate a phased software workflow (discovery, plan, build) from a central agent that converges on a self-contained plan and delegates the build to subagents.",
+      "version": "0.2.0"
     },
     {
       "name": "commit-flow",
