@@ -1,7 +1,7 @@
 {
   "name": "commit-flow",
-  "description": "Group working-tree changes into logical commits, then stage them one at a time so you write the message and commit.",
-  "version": "0.1.0",
+  "description": "Draft a plan of commit groups from the diff and plan doc, hand over a git add line per commit, and re-sync the plan as you revise.",
+  "version": "0.2.0",
   "author": {
     "name": "Jacob Bumgarner"
   }
