@@ -43,12 +43,13 @@ There is no auto-advance past these two gates. Everything between them flows.
 
 The current models for delegation. Update this list as new models release.
 
-- **Reviewers** (review phase): Sonnet 5, Opus 4.8, GLM 5.2. Run them in
-  parallel for independent perspectives.
+- **Reviewers** (review and cleanup phases): Sonnet 5 and GLM 5.2. Run them in
+  parallel for independent perspectives. No Opus at the review tier. Reviews are
+  a fan-out read task, and Sonnet handles them well at lower cost.
 - **Implementers** (build phase), routed by stage complexity:
   - **Very simple** work: GLM 5.2.
   - **Simple** work: Sonnet 5.
-  - **Complex** work: Opus 5.
+  - **Complex** work: Opus 4.8.
 
 If a listed model isn't available in the current environment, fall back to the
 nearest tier that is (for example, use Sonnet where GLM isn't configured).
@@ -269,8 +270,8 @@ Fan out independent reviews on multiple models, then triage with the user. A
 fresh context with no bias from the debates catches gaps the central agent has
 gone blind to.
 
-- Launch the reviewers from the model roster in parallel (Sonnet 5, Opus 4.8,
-  GLM 5.2). Send them in one message so they run concurrently.
+- Launch the reviewers from the model roster in parallel (Sonnet 5 and GLM 5.2).
+  Send them in one message so they run concurrently.
 - Each reviewer gets the plan file path and a critical, non-sycophantic brief:
   find gaps, ambiguities, unspecified interfaces, missing edge cases, and
   anything that would block a second agent from implementing without questions.
@@ -370,7 +371,7 @@ Delegate stage by stage. The plan is self-contained, so each subagent gets the
 plan file path and its assigned stage.
 
 - **Route by the stage's complexity tier** (see the model roster): GLM 5.2 for
-  very simple, Sonnet 5 for simple, Opus 5 for complex.
+  very simple, Sonnet 5 for simple, Opus 4.8 for complex.
 - Run stages in dependency order. A stage that depends on an earlier one waits
   for it.
 - Each subagent implements its stage, runs the stage's tests, and **checks off
@@ -386,14 +387,43 @@ as you complete it."
 ### Cleanup
 
 After the stages land, delegate a review of the actual work. Catch refactoring,
-dead code, and inconsistency the stage-by-stage build missed.
+dead code, and inconsistency the stage-by-stage build missed. Fixes flow back
+through the plan file as new stages, so the cleanup work uses the same delegate
+and check-off loop as the implement phase.
 
-- Launch Sonnet subagents to review the landed changes against the plan.
-- Each writes findings to a file (for example `./tmp/cleanup-<n>.md`) and
-  returns a summary.
+**Step 1: Review.** Launch Sonnet 5 and GLM 5.2 subagents in parallel to review
+the landed changes against the plan.
+
+- Each writes findings to a file (for example `./tmp/cleanup-<model>.md`) and
+  returns a short summary plus the path.
 - Look for: leftover scratch code, duplicated logic across stages, dead
   branches, naming drift, and anything that doesn't match the plan's intent.
-- The central agent triages the findings with the user and dispatches fixes.
+
+**Step 2: Triage.** The central agent reads the findings files, dedupes, and
+triages with the user via `AskUserQuestion`. Not every finding is valid.
+Decide which ones become fix work.
+
+**Step 3: Append follow-up stages.** For the findings the user accepts, add new
+stages to the bottom of the plan file's stages section. Don't fix inline from
+the central agent.
+
+- Write each follow-up stage in the same format as an implement stage: a
+  markdown to-do checklist of concrete steps, tagged with a complexity tier
+  (very simple, simple, complex) for model routing.
+- Group related findings into one stage. Don't make a stage per one-line fix.
+- Label the group clearly (for example `## Stage F1: cleanup follow-ups`) so
+  it's obvious these came from review, not the original plan.
+
+**Step 4: Fix.** Delegate the follow-up stages exactly like the implement phase.
+
+- Route by complexity tier: GLM 5.2 for very simple, Sonnet 5 for simple, Opus 4.8
+  for complex.
+- Each subagent implements its stage, runs the relevant tests, and checks off
+  its to-do items in the plan file. It returns a short summary.
+- The central agent confirms each stage is done before dispatching the next.
+
+Re-run Step 1 if a fix stage is large enough to warrant another look. Small
+fixes don't need another review round.
 
 ---
 
