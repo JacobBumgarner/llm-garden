@@ -1,7 +1,7 @@
 {
   "name": "orchestrate",
   "description": "Orchestrate a phased software workflow (discovery, plan, build) from a central agent that converges on a self-contained plan and delegates the build to subagents.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": {
     "name": "Jacob Bumgarner"
   }
