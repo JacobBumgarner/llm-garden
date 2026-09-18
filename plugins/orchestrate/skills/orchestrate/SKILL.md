@@ -54,6 +54,51 @@ The current models for delegation. Update this list as new models release.
 If a listed model isn't available in the current environment, fall back to the
 nearest tier that is (for example, use Sonnet where GLM isn't configured).
 
+### Recon subagent: `dodona explore`
+
+`dodona explore "<brief>"` is a disposable recon subagent you drive from `Bash`.
+It runs a headless, read-only Claude Code session on the local Dodona gateway
+model and reports back on stdout: Task, Findings, Relevant files, Open
+questions. It denies Write/Edit and destructive commands, and isolates its own
+config and transcript, so it never touches your history.
+
+Drive it the way you drive any subagent. Hand it a self-contained brief, it
+works in isolation, it returns a summary. Two things make it different from a
+Claude Task subagent: it runs on the local model, so it costs no Claude budget,
+and it's read-only, so it can only look, never change.
+
+**Dispatch and collect, don't block.** Pass `run_in_background: true` on the
+`Bash` call. Dispatch the brief, keep the Q&A with the user moving, and read the
+report from the output file when the task notification lands. Fan out a batch in
+one message when a topic opens several questions. Each runs as its own isolated
+session and reports back on its own notification. Fire them as often as you
+need, this is the cheap high-volume recon layer.
+
+Reach for it whenever you'd otherwise send a Claude `Explore` or
+`general-purpose` subagent to read the tree: how a subsystem works, where a
+thing is defined and who calls it, what pattern the repo uses, whether prior art
+exists. It's the homework that grounds `AskUserQuestion` options in real file
+and function anchors.
+
+Good briefs:
+
+- "How does `<subsystem>` work today? Name the files and functions."
+- "Where is `<thing>` defined and who calls it?"
+- "What pattern does this repo use for `<X>`? Cite examples."
+- "Is there prior art for `<feature>` in the tree?"
+
+When to send a Claude subagent instead:
+
+- Viability spikes. Those write probe code, and this subagent can't write.
+  Delegate spikes per the discovery phase.
+- Recon feeding a load-bearing decision. This runs on a smaller local model.
+  Trust it to locate code and trace conventions, but verify its judgment calls,
+  or send a Claude subagent, before they land in the plan.
+
+Each call is a fresh session with no memory of the last. Put the paths and
+context the brief needs into the brief itself. A long brief can come from stdin
+instead of args.
+
 ### Phase args
 
 `/orchestrate` with no arg starts at **discovery**. Pass a phase name to enter
@@ -140,6 +185,11 @@ Interactive. Central agent and user. Two jobs run here: deep Q&A to reduce
 ambiguity, and viability spikes to validate risky assumptions before any plan
 gets written.
 
+Lean on `dodona explore` throughout this phase (see the recon subagent). Fire
+recon briefs in the background to learn how the code works before you ask the
+user about it. The Q&A gets sharper when your questions carry file and function
+anchors instead of guesses.
+
 ### Deep Q&A
 
 Start with a natural-language back-and-forth on the topic. The user supplies
@@ -170,7 +220,9 @@ applies to every task, but you should have consciously checked each one:
 
 The user may not be the domain expert on the thing you're asking about. A bare
 "which X strategy?" with four option labels and no context puts the burden back
-on them. Do the homework first, then present a grounded decision.
+on them. Do the homework first, then present a grounded decision. Fire
+`dodona explore` (see the recon subagent) to do that homework. It hands back the
+file and function anchors every option needs.
 
 **Give context before the questions, then ask.** The `question` field of
 `AskUserQuestion` is short, and the option cards do most of the work. That's not
