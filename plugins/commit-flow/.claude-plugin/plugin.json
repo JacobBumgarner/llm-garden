@@ -1,8 +1,0 @@
-{
-  "name": "commit-flow",
-  "description": "Draft a plan of commit groups from the diff and plan doc, hand over a git add line per commit, and re-sync the plan as you revise.",
-  "version": "0.2.0",
-  "author": {
-    "name": "Jacob Bumgarner"
-  }
-}

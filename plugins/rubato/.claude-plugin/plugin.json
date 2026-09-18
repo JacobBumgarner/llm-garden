@@ -1,0 +1,8 @@
+{
+  "name": "rubato",
+  "description": "The plan-build-commit loop in one plugin: orchestrate drives a phased workflow to a self-contained plan and delegates the build, then commit-flow carves the diff into clean commits.",
+  "version": "0.4.0",
+  "author": {
+    "name": "Jacob Bumgarner"
+  }
+}

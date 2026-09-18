@@ -7,16 +7,10 @@
   "description": "Jacob Bumgarner's Claude Code skills.",
   "plugins": [
     {
-      "name": "orchestrate",
-      "source": "./plugins/orchestrate",
-      "description": "Orchestrate a phased software workflow (discovery, plan, build) from a central agent that converges on a self-contained plan and delegates the build to subagents.",
-      "version": "0.3.0"
-    },
-    {
-      "name": "commit-flow",
-      "source": "./plugins/commit-flow",
-      "description": "Draft a plan of commit groups from the diff and plan doc, hand over a git add line per commit, and re-sync the plan as you revise.",
-      "version": "0.2.0"
+      "name": "rubato",
+      "source": "./plugins/rubato",
+      "description": "The plan-build-commit loop in one plugin: orchestrate drives a phased workflow to a self-contained plan and delegates the build, then commit-flow carves the diff into clean commits.",
+      "version": "0.4.0"
     }
   ]
 }

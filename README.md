@@ -12,7 +12,7 @@ marketplace](https://code.claude.com/docs/en/plugin-marketplaces) (`llm-garden`)
 
 ```
 /plugin marketplace add JacobBumgarner/llm-garden
-/plugin install orchestrate@llm-garden
+/plugin install rubato@llm-garden
 ```
 
 ### Update
@@ -23,9 +23,9 @@ marketplace](https://code.claude.com/docs/en/plugin-marketplaces) (`llm-garden`)
 
 ### Marketplace
 
-| Plugin | Contents | Details |
+| Plugin | Skill | Details |
 | --- | --- | --- |
-| `orchestrate` | `skill` | A three-stage development workflow that a centralized agent drives. The three stages are: discovery (Q&A plus viability spikes), plan (draft, multi-model review, finalize; produces a planning `.md` file), and build (delegate staged implementation and review/cleanup to subagents). |
-| `commit-flow` | `skill` | Reviews the working-tree diffs and proposes a group of logical commits with descriptions. Designed to ensure LLM code organization is tracked by a human. |
+| `rubato` | `orchestrate` | A three-stage development workflow that a centralized agent drives. The three stages are: discovery (Q&A plus viability spikes), plan (draft, multi-model review, finalize; produces a planning `.md` file), and build (delegate staged implementation and review/cleanup to subagents). |
+| `rubato` | `commit-flow` | Reviews the working-tree diffs and proposes a group of logical commits with descriptions. Designed to ensure LLM code organization is tracked by a human. |
 
 
