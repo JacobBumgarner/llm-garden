@@ -10,7 +10,7 @@
       "name": "orchestrate",
       "source": "./plugins/orchestrate",
       "description": "Orchestrate a phased software workflow (discovery, plan, build) from a central agent that converges on a self-contained plan and delegates the build to subagents.",
-      "version": "0.2.1"
+      "version": "0.3.0"
     },
     {
       "name": "commit-flow",
