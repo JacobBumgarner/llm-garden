@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Orchestrate a phased software workflow from a central agent that converges on a self-contained plan, then delegates the build. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Accepts a phase arg (discovery, draft, review, finalize, implement, cleanup) to enter or resume at a phase.
+description: Orchestrate a phased software workflow from a central agent that converges on a self-contained plan, then delegates the build. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Accepts a phase arg (discovery, design, draft, review, finalize, implement, cleanup) to enter or resume at a phase.
 ---
 
 # Orchestrate
@@ -18,26 +18,32 @@ lean.
 
 ## How this skill runs
 
-Six phases in three groups, gated by two user approvals.
+Seven phases in four groups, with three user checkpoints. A checkpoint is a hard
+stop for user approval. Between checkpoints, phases flow without pausing.
 
-```
-Discovery          Plan                         Build
-  Q&A         ──▶   draft ──▶ review ──▶     ──▶  implement ──▶ cleanup
-  viability spikes  finalize
-        │                          │                  │
-     [Gate 1]                  [Gate 2]           (compact runs
-   "ready to draft?"      "ready to implement?"    between Gate 2
-                          then user runs /compact   and implement)
-```
+Phases in order (`group`, then phase):
 
-- **Gate 1**: after discovery, the agent asks the user if they're ready for
-  plan drafting. Nothing else in the Discovery or Plan group pauses for
-  approval. The agent flows draft → review → finalize on its own.
-- **Gate 2**: after finalize, the agent tells the user the plan is ready to
-  implement and prints the compact instruction. The user runs `/compact`, then
-  invokes the implement phase.
+1. Discovery → **discovery**: Q&A and viability spikes. Interactive.
+2. Design → **design**: concrete interface and code-shape decisions. Interactive.
+3. Plan → **draft**: write the first plan file.
+4. Plan → **review**: fan out multi-model reviews, triage findings with the user.
+5. Plan → **finalize**: reorganize the plan into staged checklists.
+6. Build → **implement**: delegate the build stage by stage.
+7. Build → **cleanup**: delegate post-build review.
 
-There is no auto-advance past these two gates. Everything between them flows.
+Checkpoints (each blocks until the user approves):
+
+- **Checkpoint 1** — after `discovery`, before `design`. Ask: ready to move into
+  design?
+- **Checkpoint 2** — after `design`, before `draft`. Ask: ready for plan drafting?
+  After this checkpoint the agent flows draft → review → finalize on its own with no
+  pause.
+- **Checkpoint 3** — after `finalize`, before `implement`. Tell the user the plan is
+  ready and print the compact instruction. The user runs `/compact`, then
+  invokes `implement`.
+
+The compact runs between Checkpoint 3 and `implement`. There is no auto-advance past
+any checkpoint.
 
 ### Model roster
 
@@ -54,50 +60,48 @@ The current models for delegation. Update this list as new models release.
 If a listed model isn't available in the current environment, fall back to the
 nearest tier that is (for example, use Sonnet where GLM isn't configured).
 
-### Recon subagent: `dodona explore`
+### Delegating to subagents
 
-`dodona explore "<brief>"` is a disposable recon subagent you drive from `Bash`.
-It runs a headless, read-only Claude Code session on the local Dodona gateway
-model and reports back on stdout: Task, Findings, Relevant files, Open
-questions. It denies Write/Edit and destructive commands, and isolates its own
-config and transcript, so it never touches your history.
+Spawn every delegate with the `Agent` tool. Pick the model by tier:
 
-Drive it the way you drive any subagent. Hand it a self-contained brief, it
-works in isolation, it returns a summary. Two things make it different from a
-Claude Task subagent: it runs on the local model, so it costs no Claude budget,
-and it's read-only, so it can only look, never change.
+- GLM 5.2: `subagent_type: "glm"`.
+- Sonnet 5: `subagent_type: "claude"`, `model: "sonnet"`.
+- Opus 4.8: `subagent_type: "claude"`, `model: "opus"`.
 
-**Dispatch and collect, don't block.** Pass `run_in_background: true` on the
-`Bash` call. Dispatch the brief, keep the Q&A with the user moving, and read the
-report from the output file when the task notification lands. Fan out a batch in
-one message when a topic opens several questions. Each runs as its own isolated
-session and reports back on its own notification. Fire them as often as you
-need, this is the cheap high-volume recon layer.
+Run independent delegates concurrently: send their `Agent` calls in one message.
+Each returns a short summary. For recon and reviews, have the subagent write
+detail to a file under `./tmp/` and hand back only the path plus a summary, so
+full output stays out of the central context.
 
-Reach for it whenever you'd otherwise send a Claude `Explore` or
-`general-purpose` subagent to read the tree: how a subsystem works, where a
-thing is defined and who calls it, what pattern the repo uses, whether prior art
-exists. It's the homework that grounds `AskUserQuestion` options in real file
-and function anchors.
+When you enter a phase mid-flow (`/orchestrate review`, `/orchestrate
+implement`), recover state first: read the plan file and see which stage items
+are already checked off before acting.
 
-Good briefs:
+### Recon subagent: GLM 5.2
+
+Delegate codebase recon to the `glm` subagent (see delegation above). It runs on
+a cheap local model, so use it as the high-volume recon layer instead of
+spending Claude budget reading the tree.
+
+Give it a **read-only brief**: look and report, don't edit. Ask it to report
+back Task, Findings, Relevant files, Open questions. Dispatch in the background,
+keep the Q&A moving, and read the report when the notification lands. Fan out a
+batch in one message when a topic opens several questions.
+
+Reach for it whenever you'd otherwise send a Claude `Explore` subagent to read
+the tree: how a subsystem works, where a thing is defined and who calls it, what
+pattern the repo uses, whether prior art exists. It grounds `AskUserQuestion`
+options in real file and function anchors. Good briefs:
 
 - "How does `<subsystem>` work today? Name the files and functions."
-- "Where is `<thing>` defined and who calls it?"
-- "What pattern does this repo use for `<X>`? Cite examples."
-- "Is there prior art for `<feature>` in the tree?"
+- "Where is `<thing>` defined and who calls it? What pattern does the repo use?"
 
-When to send a Claude subagent instead:
-
-- Viability spikes. Those write probe code, and this subagent can't write.
-  Delegate spikes per the discovery phase.
-- Recon feeding a load-bearing decision. This runs on a smaller local model.
-  Trust it to locate code and trace conventions, but verify its judgment calls,
-  or send a Claude subagent, before they land in the plan.
+Send a full Claude subagent instead when the work writes code (viability spikes)
+or when recon feeds a load-bearing decision. GLM locates code well, but verify
+its judgment calls before they land in the plan.
 
 Each call is a fresh session with no memory of the last. Put the paths and
-context the brief needs into the brief itself. A long brief can come from stdin
-instead of args.
+context the brief needs into the brief itself.
 
 ### Phase args
 
@@ -105,6 +109,7 @@ instead of args.
 or resume:
 
 - `/orchestrate` or `/orchestrate discovery` — Q&A and viability spikes.
+- `/orchestrate design` — concrete interface and code-shape decisions.
 - `/orchestrate draft` — write the first plan file.
 - `/orchestrate review` — fan out multi-model reviews.
 - `/orchestrate finalize` — reorganize into staged checklists.
@@ -113,7 +118,7 @@ or resume:
 
 ### The compact boundary
 
-A skill can't run `/compact` itself. At Gate 2, tell the user to run it
+A skill can't run `/compact` itself. At Checkpoint 3, tell the user to run it
 manually. The plan file is the source of truth from here, so the summary can
 drop the Q&A debate:
 
@@ -138,33 +143,22 @@ now-redundant discovery transcript and keeps the single-thread feel.
 
 ## Prose style
 
-Plan docs are read by humans. Write them so the user can rapidly read and
-understand, not wade through dense and verbose LLM texture. Think: Hemingway.
+Plan docs are read by humans. Write them tight, Hemingway register. Median 10-15
+words a sentence. Lead each section with its point. Contractions welcome.
 
-- **No em dashes.** Not `—`, not `--`. Use a comma, period, or parens.
-- **No semicolons.** Two sentences.
-- **No rule of three.** Two-item series are fine. Three-or-more goes in a
-  bulleted list. Don't pad to three for rhythm.
-- **No triplet adjectives.** "fast, scalable, and reliable" is marketing prose.
-  Pick the one that matters.
-- **No "not just X but Y" / "more than just X".** Say Y.
-- **No throat-clearing openers.** "In order to", "When it comes to", "It is
-  worth noting that". Delete them and start with the point.
+- **No em dashes or semicolons.** Use a comma, period, or parens. Two sentences.
+- **No rule of three.** Two-item series are fine. More goes in a bullet list.
+  Don't pad for rhythm, including triplet adjectives ("fast, scalable, reliable").
+- **No throat-clearing or filler.** Cut "In order to", "It is worth noting", "not
+  just X but Y". Start with the point.
 - **No buzzwords.** delve, robust, comprehensive, leverage, utilize, seamless,
-  streamline, cutting-edge, paramount, plethora, vital, crucial, elevate,
-  unlock. If a property matters, name the concrete mechanism.
-- **Short sentences.** Hemingway register. Median 10-15 words. Long sentences
-  only when the structure earns them, surrounded by short ones.
-- **Lead with the point.** First sentence of each section says what the section
-  is about.
-- **Concrete over abstract.** Name the file, function, table, flag.
-- **Contractions welcome.** "it's", "don't", "won't".
-- **Bullets over paragraphs** for lists of steps, requirements, or decisions.
-  Paragraphs are for context and reasoning.
-- **Backtick every code identifier.** Paths, functions, env vars, CLI commands.
+  streamline, paramount, vital, crucial, elevate, unlock. Name the mechanism.
+- **Concrete over abstract.** Name the file, function, table, flag. Backtick
+  every code identifier.
+- **Bullets for lists** of steps or requirements. Paragraphs for reasoning.
 
-Two-pass check before saving the plan file: scan for em dashes, semicolons,
-banned vocabulary, and triplet phrasing. Cut them.
+Two-pass check before saving: scan for em dashes, semicolons, banned vocabulary,
+and triplet phrasing. Cut them.
 
 ## Work guidelines
 
@@ -185,10 +179,10 @@ Interactive. Central agent and user. Two jobs run here: deep Q&A to reduce
 ambiguity, and viability spikes to validate risky assumptions before any plan
 gets written.
 
-Lean on `dodona explore` throughout this phase (see the recon subagent). Fire
-recon briefs in the background to learn how the code works before you ask the
-user about it. The Q&A gets sharper when your questions carry file and function
-anchors instead of guesses.
+Lean on the `glm` recon subagent throughout this phase (see the recon
+subagent). Fire recon briefs in the background to learn how the code works
+before you ask the user about it. The Q&A gets sharper when your questions carry
+file and function anchors instead of guesses.
 
 ### Deep Q&A
 
@@ -206,6 +200,11 @@ they haven't decided.
 Cover these dimensions before you consider discovery done. Not every dimension
 applies to every task, but you should have consciously checked each one:
 
+- **Success criteria.** What does "done and working" look like in concrete,
+  observable terms? Name the behavior or output that proves the feature works.
+  This is the anchor for the plan's "What defines success" section. Distinct
+  from verification: success criteria are what must be true, tests are how you
+  check it.
 - **Requirements.** What must be true when this is done? What's explicitly out
   of scope?
 - **Interfaces.** Function signatures, API shapes, data schemas, event formats.
@@ -220,9 +219,9 @@ applies to every task, but you should have consciously checked each one:
 
 The user may not be the domain expert on the thing you're asking about. A bare
 "which X strategy?" with four option labels and no context puts the burden back
-on them. Do the homework first, then present a grounded decision. Fire
-`dodona explore` (see the recon subagent) to do that homework. It hands back the
-file and function anchors every option needs.
+on them. Do the homework first, then present a grounded decision. Fire the
+`glm` recon subagent (see the recon subagent) to do that homework. It hands back
+the file and function anchors every option needs.
 
 **Give context before the questions, then ask.** The `question` field of
 `AskUserQuestion` is short, and the option cards do most of the work. That's not
@@ -290,27 +289,70 @@ context. The subagent returns a short verdict plus the evidence.
 Only leave viability checks for implementation time if they're low-risk sanity
 checks, not approach-deciding ones. Anything approach-deciding gets spiked here.
 
-### Gate 1
+### Checkpoint 1
 
 Once the ambiguity surface is small and the risky assumptions are validated (or
-the approach has pivoted), **ask the user if they're ready for a draft plan.**
-Don't jump into drafting. This is the first of two approval gates.
+the approach has pivoted), **ask the user if they're ready to move into
+design.** Don't jump into design. This is the first of three approval checkpoints.
+
+---
+
+## Design phase
+
+Interactive. Central agent and user. Discovery reduced conceptual ambiguity.
+Design pins down the concrete shape of the code before any plan gets drafted.
+
+Discovery answered "what and why." Design answers "what exactly does it look
+like." The point: decide the real signatures, names, and layout with the user,
+so the draft isn't guessing and you aren't reviewing abstractions.
+
+**Ask the user directly about concrete shape.** Don't stay abstract, and don't
+silently default to your own choices on decisions the user cares about. Use
+`AskUserQuestion` with context briefs, same rules as discovery. Ground every
+option in `glm` recon of the existing code so options carry real file and
+function anchors.
+
+Cover the concrete surface. Not every item applies to every task, but check each
+one:
+
+- **Function and method signatures.** Names, argument order, types, return
+  shapes.
+- **Names.** Modules, classes, functions, key variables. Naming is the user's
+  call, not yours to guess.
+- **File and module layout.** New files vs edits to existing ones. Where each
+  piece lives.
+- **Data shapes.** Schemas, records, event payloads, config keys.
+- **Code structure and style.** Error-handling shape, nesting, existing patterns
+  to mirror.
+- **Public surface.** What callers see vs internal helpers.
+
+Ground every option in existing code. Before offering a signature or naming
+option, fire `glm` recon to find the closest existing pattern and cite it.
+"Match `foo_bar()` in `path/x.py`" beats "pick a naming convention."
+
+Record the decisions. They feed straight into the draft's named files, classes,
+and functions section, so the implementer builds the exact shape the user chose.
+
+### Checkpoint 2
+
+Once the concrete shape is settled, **ask the user if they're ready for a draft
+plan.** This is the second of three approval checkpoints.
 
 ---
 
 ## Plan phase
 
-After Gate 1, the central agent flows through draft → review → finalize without
+After Checkpoint 2, the central agent flows through draft → review → finalize without
 pausing for approval. The review sub-step is interactive (you triage findings
-with the user), but it isn't a go/no-go gate.
+with the user), but it isn't a go/no-go checkpoint.
 
 ### Draft
 
-The first draft plan contains:
-
-1. A concise explanation of the request or feature.
-2. A clear, concise record of the Q&A and spike results from discovery.
-3. The drafted implementation plan.
+The draft is the first version of the plan file. Include everything from "What
+the plan file should look like" except the staged checklists, which come at
+finalize. So: context, the "What defines success" section, the Q&A and spike
+record from discovery, the design-phase interface decisions, and the drafted
+implementation approach as prose or outline.
 
 After writing the draft, review your own plan. Look for weaknesses,
 ambiguities, missed edge cases, unspecified interfaces. Raise new issues via
@@ -403,18 +445,18 @@ Anti-patterns that must not ship in the plan:
   observable output.
 - "Add tests" as a bullet with no scenario named.
 
-### Gate 2
+### Checkpoint 3
 
 When the plan is final, tell the user it's ready to implement and print the
-compact instruction (see "The compact boundary"). This is the second and last
-approval gate. Wait for the user to compact and invoke `/orchestrate
+compact instruction (see "The compact boundary"). This is the third and last
+approval checkpoint. Wait for the user to compact and invoke `/orchestrate
 implement`.
 
 ---
 
 ## Build phase
 
-After Gate 2 and the compact, the central agent delegates the build. It reads
+After Checkpoint 3 and the compact, the central agent delegates the build. It reads
 the plan file as the source of truth and hands each stage to a subagent.
 
 ### Implement
@@ -422,8 +464,8 @@ the plan file as the source of truth and hands each stage to a subagent.
 Delegate stage by stage. The plan is self-contained, so each subagent gets the
 plan file path and its assigned stage.
 
-- **Route by the stage's complexity tier** (see the model roster): GLM 5.2 for
-  very simple, Sonnet 5 for simple, Opus 4.8 for complex.
+- **Route by the stage's complexity tier**: see the model roster for the
+  tier-to-model mapping and delegation for how to spawn each.
 - Run stages in dependency order. A stage that depends on an earlier one waits
   for it.
 - Each subagent implements its stage, runs the stage's tests, and **checks off
@@ -443,13 +485,12 @@ dead code, and inconsistency the stage-by-stage build missed. Fixes flow back
 through the plan file as new stages, so the cleanup work uses the same delegate
 and check-off loop as the implement phase.
 
-**Step 1: Review.** Launch Sonnet 5 and GLM 5.2 subagents in parallel to review
-the landed changes against the plan.
-
-- Each writes findings to a file (for example `./tmp/cleanup-<model>.md`) and
-  returns a short summary plus the path.
-- Look for: leftover scratch code, duplicated logic across stages, dead
-  branches, naming drift, and anything that doesn't match the plan's intent.
+**Step 1: Review.** Same fan-out as the review phase, but against the landed
+changes instead of the plan. Launch Sonnet 5 and GLM 5.2 in parallel, each
+writes findings to a file (for example `./tmp/cleanup-<model>.md`) and returns a
+summary plus the path. Look for leftover scratch code, duplicated logic across
+stages, dead branches, naming drift, and anything that doesn't match the plan's
+intent.
 
 **Step 2: Triage.** The central agent reads the findings files, dedupes, and
 triages with the user via `AskUserQuestion`. Not every finding is valid.
@@ -468,8 +509,7 @@ the central agent.
 
 **Step 4: Fix.** Delegate the follow-up stages exactly like the implement phase.
 
-- Route by complexity tier: GLM 5.2 for very simple, Sonnet 5 for simple, Opus 4.8
-  for complex.
+- Route by complexity tier (see the model roster), same as implement.
 - Each subagent implements its stage, runs the relevant tests, and checks off
   its to-do items in the plan file. It returns a short summary.
 - The central agent confirms each stage is done before dispatching the next.
@@ -483,7 +523,12 @@ fixes don't need another review round.
 
 - Context section up top: why this change, what problem it solves, intended
   outcome.
+- "What defines success" section: the concrete, observable criteria that prove
+  the feature works. Separate from the verification section, which lists the
+  tests that check those criteria.
 - Q&A record from discovery (and follow-up rounds), plus viability spike results.
+- Concrete interface and code-shape decisions from the design phase: signatures,
+  names, file layout, data shapes.
 - Named files, classes, functions to be touched or created, with requirements
   per unit.
 - Reused utilities and functions called out with paths so the implementer
@@ -502,7 +547,7 @@ fixes don't need another review round.
   before it.
 - Asking open-ended questions with no options, or options with no trade-off
   `description`, or no recommended option. See the discovery phase.
-- Drafting the plan before Gate 1.
+- Drafting the plan before Checkpoint 2.
 - Writing the full plan on top of an unvalidated load-bearing assumption. Spike
   it first.
 - Over-splitting stages into trivia.
