@@ -1,560 +1,599 @@
 ---
 name: orchestrate
-description: Orchestrate a phased software workflow from a central agent that converges on a self-contained plan, then delegates the build. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Accepts a phase arg (discovery, design, draft, review, finalize, implement, cleanup) to enter or resume at a phase.
+description: Orchestrate a phased software workflow in which agents design and build while the user acts as tech lead, reviewing at fixed checkpoints. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Run `/orchestrate implement` after compaction to build the approved plan.
 ---
 
 # Orchestrate
 
-Drive a phased workflow that ends in a self-contained plan file, then delegate
-the build stage-by-stage. The agent implementing the plan should not have to
-guess about implementation details. Your job in the planning phases is to reduce
-ambiguity, not to write production code.
+This skill lets a user act as tech lead over a team of agents. The agents design
+and build a piece of software, new or a change to something existing. The user
+reviews at fixed checkpoints until they can defend what was built without
+having read the code: why this approach over the alternatives, where it fails,
+what each piece owns.
 
-One agent (the session the user is typing into) stays central across the whole
-flow. It owns the plan file and every conversation with the user. It hands the
-heavy, non-interactive work (viability spikes, reviews, implementation, cleanup)
-to subagents that report back short summaries, so the central context stays
-lean.
+You are the orchestrator agent. The orchestrator stays central across the whole
+workflow. It owns the plan file and every conversation with the user. It hands
+the heavy, non-interactive work to subagents that report back summaries, so the
+central context stays lean. It delegates by default.
 
-## How this skill runs
+The workflow never depends on the user authoring the design, reading code line
+by line, or tracking progress by hand. Agents produce every artifact and keep
+the ledger. The user can go as deep as they like at any point, and the
+checkpoints are built so that they don't have to.
 
-Seven phases in four groups, with three user checkpoints. A checkpoint is a hard
-stop for user approval. Between checkpoints, phases flow without pausing.
+## Workflow
 
-Phases in order (`group`, then phase):
+Four phases, three checkpoints. A checkpoint is a hard stop for user approval.
+Between checkpoints, activities run without pausing.
 
-1. Discovery → **discovery**: Q&A and viability spikes. Interactive.
-2. Design → **design**: concrete interface and code-shape decisions. Interactive.
-3. Plan → **draft**: write the first plan file.
-4. Plan → **review**: fan out multi-model reviews, triage findings with the user.
-5. Plan → **finalize**: reorganize the plan into staged checklists.
-6. Build → **implement**: delegate the build stage by stage.
-7. Build → **cleanup**: delegate post-build review.
+```
+request
+  -> Discovery:  Q&A with the user, recon of existing code
+  -> Checkpoint 1: orchestrator proposes depth, user confirms
+  -> Whiteboard: propose -> critic asks questions -> answer or revise
+  -> Checkpoint 2: pitch and questions, user follows up, approves the design
+  -> Plan:       stage the design, critic checks the split
+  -> Checkpoint 3: one line per stage, user approves, compacts
+  -> Build:      per stage: build -> review -> revise -> record outcome
+                 then cleanup, then the final report
+  -> user reads built against approved, decides whether it lands
+```
 
-Checkpoints (each blocks until the user approves):
+The phases run named activities: Q&A, recon, design loop, staging, implement,
+cleanup, report. Build works through ordered **stages** written during staging.
+A stage is one buildable unit of the plan. This is the only meaning of "stage"
+in the workflow.
 
-- **Checkpoint 1** — after `discovery`, before `design`. Ask: ready to move into
-  design?
-- **Checkpoint 2** — after `design`, before `draft`. Ask: ready for plan drafting?
-  After this checkpoint the agent flows draft → review → finalize on its own with no
-  pause.
-- **Checkpoint 3** — after `finalize`, before `implement`. Tell the user the plan is
-  ready and print the compact instruction. The user runs `/compact`, then
-  invokes `implement`.
+### Depth
 
-The compact runs between Checkpoint 3 and `implement`. There is no auto-advance past
-any checkpoint.
+The unit of this workflow is one piece of work the user can hold and defend in
+a single plan. Discovery always runs, because the orchestrator can't size what
+it doesn't understand. At Checkpoint 1 it states what the Q&A revealed and
+proposes one of four depths. The user confirms or redirects.
 
-### Model roster
+- **Skip.** Trivial. The orchestrator offers to just do it in conversation and
+  leaves the workflow. No plan file, no further checkpoints. A typo or a
+  one-liner doesn't need a plan.
+- **Collapsed.** Small but real, a few files with one clear approach. The
+  orchestrator drafts the design itself instead of delegating, the critic asks
+  its questions, the orchestrator answers or revises, a fresh critic call
+  marks the answers, and the user sees the same Checkpoint 2 blocks. The
+  orchestrator writes one or two stages itself, the critic checks the split,
+  and the user sees them at Checkpoint 3. The plan file is still created.
+  Compaction is skipped unless the user wants it, and Build starts on
+  approval. Implement still delegates the build and the review. Cleanup's
+  fan-out is skipped, the stage reviews are the review, and the orchestrator
+  writes the final report itself.
+- **Normal.** Fits one defensible plan. The full workflow as written below.
+- **Decompose-first.** Too large for one defensible plan, or spans repos. The
+  Whiteboard runs one altitude up: the components are sub-features and the
+  primary path is the flow between them. The user approves that carve-up. The
+  coordinating plan lives at `plan/{plan-name}.md` and its stages are the
+  sub-features, in dependency order. Each sub-feature then gets its own normal
+  run with its own plan file at `plan/{plan-name}-{sub-feature}.md`, and its
+  Outcome in the coordinating plan records when it landed.
 
-The current models for delegation. Update this list as new models release.
+## Operating principles
 
-- **Reviewers** (review and cleanup phases): Sonnet 5 and GLM 5.2. Run them in
-  parallel for independent perspectives. No Opus at the review tier. Reviews are
-  a fan-out read task, and Sonnet handles them well at lower cost.
-- **Implementers** (build phase), routed by stage complexity:
-  - **Very simple** work: GLM 5.2.
-  - **Simple** work: Sonnet 5.
-  - **Complex** work: Opus 4.8.
+### Work guidelines
 
-If a listed model isn't available in the current environment, fall back to the
-nearest tier that is (for example, use Sonnet where GLM isn't configured).
+The orchestrator works methodically and carefully. It rejects hacky or
+short-cut proposals. Planning is calm, with no rush.
 
-### Delegating to subagents
+Never estimate effort in time. Estimate by impact surface instead: files
+touched, lines changed, modules affected, new tests. Time is not a factor in
+the decision to build something cleanly.
 
-Spawn every delegate with the `Agent` tool. Pick the model by tier:
+The code will be read by humans and by other agents, so it holds to the bar set
+in Cleanup.
 
-- GLM 5.2: `subagent_type: "glm"`.
-- Sonnet 5: `subagent_type: "claude"`, `model: "sonnet"`.
-- Opus 4.8: `subagent_type: "claude"`, `model: "opus"`.
+### Delegation and model roster
 
-Run independent delegates concurrently: send their `Agent` calls in one message.
-Each returns a short summary. For recon and reviews, have the subagent write
-detail to a file under `./tmp/` and hand back only the path plus a summary, so
-full output stays out of the central context.
+The orchestrator hands recon, design, staging, reviews, implementation, and
+reporting to subagents. It reads code directly only when a quick look beats a
+delegate. Route each role to a model by weight: a decision that cascades if
+wrong earns a strong model, high-volume reading goes to the cheap one.
 
-When you enter a phase mid-flow (`/orchestrate review`, `/orchestrate
-implement`), recover state first: read the plan file and see which stage items
-are already checked off before acting.
+Three tiers, named GLM, Sonnet, and Opus throughout this skill:
 
-### Recon subagent: GLM 5.2
+- **Recon**: GLM. Runs locally and free, so it is the high-volume read layer.
+  The orchestrator fans out several in parallel.
+- **Proposer** (design, staging): Sonnet.
+- **Critic** (design questions, staging check): Opus. Fresh eyes on the
+  highest-weight, lowest-volume work.
+- **Implementer**, routed by the stage's complexity tier: very simple to GLM,
+  simple to Sonnet, complex to Opus.
+- **Stage reviewer**: a model other than the stage's implementer, so the review
+  is a second perspective. Sonnet, or Opus when Sonnet implemented.
+- **Cleanup reviewers**: Sonnet and GLM in parallel.
+- **Reporter** (final report): Sonnet.
 
-Delegate codebase recon to the `glm` subagent (see delegation above). It runs on
-a cheap local model, so use it as the high-volume recon layer instead of
-spending Claude budget reading the tree.
+#### Model availability
 
-Give it a **read-only brief**: look and report, don't edit. Ask it to report
-back Task, Findings, Relevant files, Open questions. Dispatch in the background,
-keep the Q&A moving, and read the report when the notification lands. Fan out a
-batch in one message when a topic opens several questions.
+This skill runs in several environments with different models installed. Each
+tier resolves to the newest available model, checked once at the start of a
+workflow:
 
-Reach for it whenever you'd otherwise send a Claude `Explore` subagent to read
-the tree: how a subsystem works, where a thing is defined and who calls it, what
-pattern the repo uses, whether prior art exists. It grounds `AskUserQuestion`
-options in real file and function anchors. Good briefs:
+- **GLM**: GLM 5.2 through `subagent_type: "glm"`. If that agent type isn't
+  available, Sonnet takes every GLM role. Recon still fans out, and the two
+  Cleanup reviewers become Sonnet and Opus.
+- **Sonnet**: Sonnet 5.5, or Sonnet 5 as the fallback. Spawn with
+  `subagent_type: "claude"`, `model: "sonnet"`.
+- **Opus**: Opus 5.5, or Opus 4.8 as the fallback. Spawn with
+  `subagent_type: "claude"`, `model: "opus"`.
 
-- "How does `<subsystem>` work today? Name the files and functions."
-- "Where is `<thing>` defined and who calls it? What pattern does the repo use?"
+The orchestrator runs independent delegates concurrently by sending their
+`Agent` calls in one message. Each call is a fresh session with no memory of
+the last and cannot read this skill, so the brief carries every path and fact
+the delegate needs, plus the slice of this skill its role depends on: the plan
+file Structure and notation rules for a proposer or reporter, the Staging rules
+for a staging critic, the Cleanup bar and the repo's own lint and test commands
+for an implementer or reviewer, and the Prose rules for anything the user will
+read. Delegates never commit. Whether `plan/` is committed follows the repo's
+own conventions.
 
-Send a full Claude subagent instead when the work writes code (viability spikes)
-or when recon feeds a load-bearing decision. GLM locates code well, but verify
-its judgment calls before they land in the plan.
+Delegates write detail to `plan/scratch/{plan-name}/`, one flat directory per
+plan (`recon-{topic}.md`, `design-v1.md`, `questions.md`, `review-stage-2.md`).
+They return a summary and the path. Scratch is never the plan, and every file
+in it is safe to delete once the run is done, whether it fed the next
+delegate (`design-v1.md`, `stages-v1.md`, `marks.md`) or was findings nobody
+read twice (a recon report, a stage review). Whether `plan/scratch/` is
+gitignored or committed follows the repo's own conventions.
 
-Each call is a fresh session with no memory of the last. Put the paths and
-context the brief needs into the brief itself.
+A recon brief is read-only: look and report, don't edit. It asks for Findings,
+Relevant files, and Open questions. GLM locates code well, but the orchestrator
+verifies its judgment calls before they reach the plan. Anything that writes
+code before Build, including a spike, goes to a Sonnet delegate.
 
-### Phase args
+### Showing work to the user
 
-`/orchestrate` with no arg starts at **discovery**. Pass a phase name to enter
-or resume:
+The user's attention is the scarcest resource in the workflow. Everything
+shown to them is short, structured, and shaped for a scan, not a read-through.
 
-- `/orchestrate` or `/orchestrate discovery` — Q&A and viability spikes.
-- `/orchestrate design` — concrete interface and code-shape decisions.
-- `/orchestrate draft` — write the first plan file.
-- `/orchestrate review` — fan out multi-model reviews.
-- `/orchestrate finalize` — reorganize into staged checklists.
-- `/orchestrate implement` — delegate the build. Run this after `/compact`.
-- `/orchestrate cleanup` — delegate post-build review.
+- Everything the orchestrator shows at a checkpoint is a fenced block in the
+  plan file's notation, with at most one framing line of prose above it. A
+  block in chat is a slice of the plan file, not a reformatting of it.
+- Every line has a budget. A pitch is under 100 words. A component, a stage, a
+  divergence is one line. A question's answer is two lines. A reply to a
+  follow-up is five lines, or the orchestrator sends a delegate to find out.
+- Decisions the user arbitrates go through `AskUserQuestion`, never through
+  prose. That includes the checkpoints: the depths at Checkpoint 1, approve or
+  redirect at Checkpoints 2 and 3, land or not at the final report. The tool's
+  fields are small, so when a decision needs framing, the orchestrator writes
+  a short context block first, then fires the tool.
+- The user never has to open the plan file. It exists so the design survives
+  compaction, so staging has a source, and so the final report has something
+  to check against.
+- For a change to a system the user already knows, the pitch is a delta: what
+  changes and why, not a tour of what exists.
 
-### The compact boundary
+Rules for every `AskUserQuestion` call:
 
-A skill can't run `/compact` itself. At Checkpoint 3, tell the user to run it
-manually. The plan file is the source of truth from here, so the summary can
-drop the Q&A debate:
+- Enumerate concrete options. If the orchestrator can't name two real options,
+  do recon first. If only the user can resolve the ambiguity, ask them openly
+  in conversation instead. Forcing multiple choice onto real intent ambiguity
+  is worse than a plain question.
+- Every option's `description` names the trade-off: what it gains, what it
+  costs later. One or two sentences.
+- Recommend one option, put it first, append `(Recommended)` to its label, and
+  tie the reason to a constraint the user already gave. If nothing is
+  defensible, say "both are fine, pick based on X" in the question text.
+- Options are mutually exclusive and real. No filler hybrids.
+- Cite the anchor: file, function, prior decision.
+- Cap at four options. Batch up to four related questions in one call.
 
-> Plan is final at `path/to/plan.md`. Run `/compact focus on the plan file at
-> path/to/plan.md and the remaining implementation stages`, then invoke
+### Resuming and compaction
+
+`/orchestrate` with no argument starts a fresh workflow at Discovery, or resumes
+one. If a plan file for the current task exists, the orchestrator reads it and
+continues from its state: which layers are written, which stages are settled
+or pending. If only `plan/scratch/{plan-name}/discovery.md` exists, it resumes
+at the depth recorded there.
+
+The one explicit argument is `/orchestrate implement`. The user runs it after
+the Checkpoint 3 compaction to enter Build against the approved plan. Once the
+stages are approved, the bare command resumes at the same place, so the two are
+interchangeable there.
+
+A skill can't run `/compact` itself, so at Checkpoint 3 the orchestrator tells
+the user to. The plan file is the source of truth from there, so the summary can
+drop the Q&A and the design debate:
+
+> Plan approved at `plan/{plan-name}.md`. Run `/compact focus on the plan file
+> at plan/{plan-name}.md and the pending stages`, then run
 > `/orchestrate implement`.
 
-Compaction is optional, not load-bearing. Subagents hand back only a summary, so
-the implement phase stays lean even without it. Compaction mostly clears the
-now-redundant discovery transcript and keeps the single-thread feel.
+Compaction is recommended, not required. Delegates return summaries, so Build
+stays lean either way.
 
-## Plan file goal
+### Prose
 
-- One self-contained, fully encapsulated plan file. A second agent should be
-  able to pick it up and implement without back-and-forth (small clarifications
-  during dev are fine, but the ambiguity surface should be minimal).
-- No line-by-line code chunks. Do outline the source files, classes, and
-  functions that will be created or edited, with clear requirements for each.
-  Skeleton code outlines are good, as long as they are short and clear. Provide
-  enough context for the implementer to understand the intent and requirements
-  of each function or class.
+These rules cover every line an agent writes for the user, including the plan
+file and delegate briefs. When the orchestrator delegates writing, it passes
+them into the brief.
 
-## Prose style
+Write concisely. Lead with the point. Contractions are fine.
 
-Plan docs are read by humans. Write them tight, Hemingway register. Median 10-15
-words a sentence. Lead each section with its point. Contractions welcome.
+- No em dashes or semicolons. Use a comma or a period.
+- No rule of three. Two items, or a real list.
+- No throat-clearing. Cut "in order to", "it is worth noting", "not just X but
+  Y".
+- No buzzwords: delve, robust, comprehensive, leverage, utilize, seamless,
+  streamline, paramount, vital, crucial, elevate, unlock, load-bearing. Name
+  the mechanism.
+- Concrete over abstract. Name the file, function, or flag. Backtick every
+  identifier.
+- Structural markdown only: lists, checkboxes, fenced blocks, bold keywords.
+  No tables, no alignment for looks.
 
-- **No em dashes or semicolons.** Use a comma, period, or parens. Two sentences.
-- **No rule of three.** Two-item series are fine. More goes in a bullet list.
-  Don't pad for rhythm, including triplet adjectives ("fast, scalable, reliable").
-- **No throat-clearing or filler.** Cut "In order to", "It is worth noting", "not
-  just X but Y". Start with the point.
-- **No buzzwords.** delve, robust, comprehensive, leverage, utilize, seamless,
-  streamline, paramount, vital, crucial, elevate, unlock. Name the mechanism.
-- **Concrete over abstract.** Name the file, function, table, flag. Backtick
-  every code identifier.
-- **Bullets for lists** of steps or requirements. Paragraphs for reasoning.
+## Phase 1: Discovery
 
-Two-pass check before saving: scan for em dashes, semicolons, banned vocabulary,
-and triplet phrasing. Cut them.
+Discovery reduces ambiguity. The orchestrator and the user talk until the
+requirements are clear, while recon delegates learn how the existing code works
+so the questions carry real anchors instead of guesses.
 
-## Work guidelines
+### Q&A
 
-- Methodical, clean, careful. No patched, short-work, or hacky proposals.
-- We are not in a rush. Planning is calm and smooth. Effective beats hasty,
-  half-baked ideas.
-- **Never estimate in temporal units.** No "1-2 days", no "a few hours".
-  Estimate by *impact surface*: files touched, LoC changed, new tests, modules
-  affected. Time is not a factor in the decision to build something cleanly.
-- A human and other agents will read this code. Best practices, shallow nesting,
-  low cyclomatic complexity, well-organized.
+The orchestrator opens a back-and-forth on the request. The user supplies
+context and constraints. The orchestrator pokes holes and surfaces what
+the user hasn't decided.
 
----
+Multiple rounds are expected. If the orchestrator wants to move on after one
+round, it is skipping edge cases, so it runs another. There is no question cap.
 
-## Discovery phase
+The orchestrator checks each dimension. Not every one applies to every task:
 
-Interactive. Central agent and user. Two jobs run here: deep Q&A to reduce
-ambiguity, and viability spikes to validate risky assumptions before any plan
-gets written.
-
-Lean on the `glm` recon subagent throughout this phase (see the recon
-subagent). Fire recon briefs in the background to learn how the code works
-before you ask the user about it. The Q&A gets sharper when your questions carry
-file and function anchors instead of guesses.
-
-### Deep Q&A
-
-Start with a natural-language back-and-forth on the topic. The user supplies
-context, ideas, questions, and drafted details. You poke holes and surface what
-they haven't decided.
-
-- **Iterate. Multiple rounds are expected.** One round is almost never enough.
-  Keep going until the ambiguity surface is genuinely small.
-- **Don't converge early.** If you find yourself wanting to draft after one
-  round, you're probably skipping edge cases. Do another round first.
-- Ask as many questions as you need. There's no maximum. The goal is a clear
-  plan, not a short session.
-
-Cover these dimensions before you consider discovery done. Not every dimension
-applies to every task, but you should have consciously checked each one:
-
-- **Success criteria.** What does "done and working" look like in concrete,
-  observable terms? Name the behavior or output that proves the feature works.
-  This is the anchor for the plan's "What defines success" section. Distinct
-  from verification: success criteria are what must be true, tests are how you
-  check it.
-- **Requirements.** What must be true when this is done? What's explicitly out
-  of scope?
-- **Interfaces.** Function signatures, API shapes, data schemas, event formats.
+- **Success criteria.** What proves the work is done, in observable terms. This
+  is what must be true. Verification is how it gets checked.
+- **Requirements and non-goals.** What must hold, and what is explicitly out of
+  scope.
+- **Interfaces.** The touchpoints: signatures, API shapes, schemas, event
+  formats, and their constraints. The design is proposed in Whiteboard, the
+  constraints are gathered here.
 - **Edge cases.** Empty inputs, concurrency, partial failure, large inputs.
-- **Failure modes.** What happens when a dependency is down or returns garbage?
-- **Non-goals.** What are we deliberately not building or handling?
-- **Prior art.** What existing code, utility, or pattern should this reuse?
-- **Verification.** See the verification section. Ask about tests here, not at
-  finalize.
+- **Failure modes.** What happens when a dependency is down or returns garbage.
+- **Prior art.** Existing code or patterns to reuse.
+- **Verification.** What kinds of tests the user expects, and what the repo
+  already has.
 
-### Ask questions the user can actually answer
+The user may not be the expert on what the orchestrator is asking about. A bare
+"which X?" with four labels is unproductive, so every decision follows the
+`AskUserQuestion` rules (see Showing work to the user): recon first, then a
+grounded choice.
 
-The user may not be the domain expert on the thing you're asking about. A bare
-"which X strategy?" with four option labels and no context puts the burden back
-on them. Do the homework first, then present a grounded decision. Fire the
-`glm` recon subagent (see the recon subagent) to do that homework. It hands back
-the file and function anchors every option needs.
+### Recon
 
-**Give context before the questions, then ask.** The `question` field of
-`AskUserQuestion` is short, and the option cards do most of the work. That's not
-enough room to explain a subtle decision. So before a batch of questions, write
-a plain-text brief in normal output, then fire the tool. Format:
+Before the first brief, the orchestrator names the plan, kebab-case from the
+request, so scratch has a directory. If a plan file already matches the
+request, that name is reused and the workflow resumes instead. Throughout Q&A,
+the orchestrator fires GLM recon briefs in the background: how a subsystem
+works, where a thing is defined and who calls it, what pattern the repo uses,
+whether prior art exists. It fans out a batch in one message when a topic
+opens several questions.
 
-```
-## Q1 context
-<one or two paragraphs framing what this decision is, why it matters, what
-you found in the code, what the trade-off hinges on>
-
-## Q2 context
-<...>
-```
-
-Then call `AskUserQuestion` with the questions. The brief carries the
-reasoning. The tool carries the decision. This is the one place a prose block is
-correct. A prose block that *is* the questions is still banned.
-
-Every `AskUserQuestion` call must follow these rules:
-
-- **Never ask an open-ended "what should we do?"** Enumerate concrete options.
-  If you can't name two real options, the question isn't ready. Go read the code
-  or the docs first.
-- **Every option needs a `description` that names the trade-off.** What you
-  gain, what you give up, what it costs later. One or two sentences.
-- **Recommend one option.** Put it first and append `(Recommended)` to its
-  `label`. State why in its `description`, tied to constraints the user already
-  gave you (project conventions, existing patterns, prior answers).
-- **Options must be mutually exclusive and real.** No "Option A" / "Option B" /
-  "hybrid" / "something else" filler. If a hybrid is right, make it its own
-  option with its own trade-off.
-- **Cite the concrete anchor.** File path, existing function, library version,
-  prior decision in this session. Options that reference `path/to/thing`
-  beat options that reference "the session layer".
-- **Cap it at four options.** If you have more, you haven't narrowed enough.
-  Prune to the top candidates and say in the question text what you dropped.
-
-If a question genuinely has no defensible recommendation, say so in the question
-text: "Both are fine. Pick based on X." Don't fake a recommendation.
-
-### Viability spikes (Stage 0)
-
-Validate the plan's load-bearing assumptions before drafting. A plan built on an
-unproven assumption is wasted if the assumption turns out false.
-
-During Q&A, name the assumptions the plan depends on. A load-bearing assumption
-is one where, if it's false, the whole approach changes. Examples:
-
-- "Library X actually supports streaming responses."
-- "This API returns the field we need."
-- "This query is fast enough at production row counts."
-- "These two systems can share a transaction."
-
-For each risky assumption, run a **spike**: throwaway probe code in `./tmp/`
-that answers viable or not-viable with evidence. Delegate the spike to a
-subagent so the probe's file reads and debugging stay out of the central
-context. The subagent returns a short verdict plus the evidence.
-
-- If the spike holds, note it and move on.
-- If the spike fails, pivot the approach with the user *now*, before any plan
-  exists. This is the whole point. A failed spike costs a scratch file, not a
-  full plan doc.
-
-Only leave viability checks for implementation time if they're low-risk sanity
-checks, not approach-deciding ones. Anything approach-deciding gets spiked here.
+When the approach rests on an assumption that would change everything if false,
+the orchestrator spikes it: a Claude delegate writes throwaway probe code under
+`plan/scratch/{plan-name}/` and returns a verdict with evidence. A failed spike
+pivots the approach with the user now, before any design exists. Low-risk
+sanity checks can wait for Build.
 
 ### Checkpoint 1
 
-Once the ambiguity surface is small and the risky assumptions are validated (or
-the approach has pivoted), **ask the user if they're ready to move into
-design.** Don't jump into design. This is the first of three approval checkpoints.
+Once the ambiguity surface is small and risky assumptions are checked, the
+orchestrator writes the Discovery record to
+`plan/scratch/{plan-name}/discovery.md` in the plan file's notation (Context,
+Success criteria, Discovery record).
 
----
+It then shows the user one block, the Success criteria and Discovery record
+copied from that file with a `depth:` line proposing one of the four depths and
+why (see Depth). The user confirms or redirects, and the confirmed depth is
+written back to `discovery.md`.
 
-## Design phase
+## Phase 2: Whiteboard
 
-Interactive. Central agent and user. Discovery reduced conceptual ambiguity.
-Design pins down the concrete shape of the code before any plan gets drafted.
+Whiteboard produces a design the user can defend. No production code is written
+here. The design is iterated by agents, then presented to the user as a pitch
+and the questions it survived.
 
-Discovery answered "what and why." Design answers "what exactly does it look
-like." The point: decide the real signatures, names, and layout with the user,
-so the draft isn't guessing and you aren't reviewing abstractions.
+Discovery answered what and why. Whiteboard answers what the thing is: its
+components by responsibility, how the main job flows through them, and the
+decisions that shaped it. Not function internals, not lines.
 
-**Ask the user directly about concrete shape.** Don't stay abstract, and don't
-silently default to your own choices on decisions the user cares about. Use
-`AskUserQuestion` with context briefs, same rules as discovery. Ground every
-option in `glm` recon of the existing code so options carry real file and
-function anchors.
+### The design loop
 
-Cover the concrete surface. Not every item applies to every task, but check each
-one:
+One pass of propose, question, answer or revise. Further rounds are driven by
+the user's follow-ups at Checkpoint 2, not by the critic.
 
-- **Function and method signatures.** Names, argument order, types, return
-  shapes.
-- **Names.** Modules, classes, functions, key variables. Naming is the user's
-  call, not yours to guess.
-- **File and module layout.** New files vs edits to existing ones. Where each
-  piece lives.
-- **Data shapes.** Schemas, records, event payloads, config keys.
-- **Code structure and style.** Error-handling shape, nesting, existing patterns
-  to mirror.
-- **Public surface.** What callers see vs internal helpers.
+1. **Propose.** The proposer (Sonnet) writes the four design layers (see The
+   plan file) to `plan/scratch/{plan-name}/design-v1.md`, from the Discovery
+   record and the recon anchors. The primary path is traced. Every real
+   decision goes into layer 3 as a question the proposer asked itself, with
+   its answer naming the alternative and the why.
+2. **Question.** The critic (Opus) reads the proposal and writes the
+   questions a skeptical lead would ask, to `questions.md`. Where does this
+   fail. Why this boundary and not that one. What from Discovery is missing.
+   What is here that nobody asked for. Not naming, not lines.
+3. **Answer or revise.** The proposer answers every question in two lines or
+   fewer, or changes the design and says what moved. It writes `design-v2.md`
+   and `answers.md`.
+4. **Mark.** A fresh critic call gets the proposal, the questions, and the
+   answers, and writes `marks.md`: each answer marked settled, changed the
+   design, or open. It ranks the settled ones by how much they matter, and for
+   each open one it writes the options and trade-offs the user will choose
+   between.
+5. **Record.** The orchestrator creates the plan file at `plan/{plan-name}.md`:
+   `discovery.md` copied in, then the design layers from `design-v2.md`, with
+   layer 3 rebuilt from the questions, answers, and marks. Phase 3 extends this
+   file. It does not start a new one.
 
-Ground every option in existing code. Before offering a signature or naming
-option, fire `glm` recon to find the closest existing pattern and cite it.
-"Match `foo_bar()` in `path/x.py`" beats "pick a naming convention."
-
-Record the decisions. They feed straight into the draft's named files, classes,
-and functions section, so the implementer builds the exact shape the user chose.
+A later round on part of the design runs Answer or revise and Mark only, on
+the affected part, writes the next `design-v{n}.md`, and rewrites the affected
+design layers in the plan file. The decisions layer is only ever appended to.
 
 ### Checkpoint 2
 
-Once the concrete shape is settled, **ask the user if they're ready for a draft
-plan.** This is the second of three approval checkpoints.
+The orchestrator presents the design in two blocks, then waits.
 
----
+The pitch: layer 1, the primary path, and the component lines from layer 2,
+copied from the plan file. Under 100 words of prose. For a non-linear design,
+the Mermaid flowchart comes along.
 
-## Plan phase
+The questions, grouped. Changed first, all of them: the question, the two-line
+answer, and what moved in the design. Open next: put to the user through
+`AskUserQuestion` with the options laid out, in batches of four when there are
+more, most consequential first. Settled last: at most four, taken from the
+critic's ranking, and always including where the design fails. The rest stay
+in the plan file.
 
-After Checkpoint 2, the central agent flows through draft → review → finalize without
-pausing for approval. The review sub-step is interactive (you triage findings
-with the user), but it isn't a go/no-go checkpoint.
+The user follows up on any thin answer. The orchestrator replies within the
+budget (see Showing work to the user). Follow-ups and their answers are
+appended to the decisions layer. If a follow-up changes the design, the affected
+part goes back through the loop.
 
-### Draft
+When the open questions are resolved and the user has no more follow-ups, the
+orchestrator asks whether the design is approved.
 
-The draft is the first version of the plan file. Include everything from "What
-the plan file should look like" except the staged checklists, which come at
-finalize. So: context, the "What defines success" section, the Q&A and spike
-record from discovery, the design-phase interface decisions, and the drafted
-implementation approach as prose or outline.
+## Phase 3: Plan
 
-After writing the draft, review your own plan. Look for weaknesses,
-ambiguities, missed edge cases, unspecified interfaces. Raise new issues via
-`AskUserQuestion` (with context briefs). Update the doc as decisions land.
+Plan turns the approved design into ordered stages. Stages are a projection of
+the design, not a list written first with the design implied.
 
-### Review
+### Staging
 
-Fan out independent reviews on multiple models, then triage with the user. A
-fresh context with no bias from the debates catches gaps the central agent has
-gone blind to.
+1. **Propose the split.** The proposer (Sonnet) reads the plan file and
+   writes stage blocks (see The plan file) to
+   `plan/scratch/{plan-name}/stages-v1.md`.
+2. **Check the split.** The critic (Opus) checks it against these rules,
+   including each stage's tier, and returns findings. The proposer revises to
+   `stages-v2.md`. One round.
+3. **Record.** The orchestrator appends the stage blocks to the plan file.
 
-- Launch the reviewers from the model roster in parallel (Sonnet 5 and GLM 5.2).
-  Send them in one message so they run concurrently.
-- Each reviewer gets the plan file path and a critical, non-sycophantic brief:
-  find gaps, ambiguities, unspecified interfaces, missing edge cases, and
-  anything that would block a second agent from implementing without questions.
-- **Each reviewer writes its findings to a file** (for example
-  `./tmp/review-<model>.md`) and returns a short summary plus the path. This
-  keeps full critiques out of the central context.
-- The central agent reads the findings files, dedupes, and triages with the
-  user via `AskUserQuestion`. Not every finding is valid. Discuss, decide, and
-  edit the plan.
+The rules:
 
-### Finalize
+- **Boundaries follow the design.** Each stage delivers one or a few components
+  from layer 2. Every component is owned by exactly one stage.
+- **Order follows dependency.** Each stage leaves the repo working and
+  verifiable on its own. No stage depends on a later one.
+- **Size follows the implementer.** A stage fits one delegate's context without
+  compaction. A long Planned field or too many components means it splits.
+  Over-splitting is as bad: ten trivial stages are worse than three right-sized
+  ones.
+- **Every stage carries Planned, Verify, and Touches.** Planned is the intent.
+  Verify names the check that proves it, and the check must be one that would
+  catch a real defect, not one that re-asserts a mock. Touches lists the files
+  from layer 4. Outcome starts as `pending`.
+- **Every stage carries a complexity tier** for model routing: very simple,
+  simple, or complex.
+- **Too many stages for one plan means decompose.** The orchestrator returns to
+  Checkpoint 1 and proposes decompose-first.
 
-Once the doc is stable, reorganize the implementation section into markdown
-to-do stages.
-
-- Stages are the actual implementation, ordered so each builds on the last.
-  Each stage is a markdown to-do list of concrete steps.
-- Size each stage so an Opus-grade agent can implement it independently within
-  one context window. **Don't over-split.** One bloated stage is bad, ten tiny
-  stages is worse than three right-sized ones.
-- Tag each stage with a complexity tier so the implement phase can route it to
-  the right model (see the model roster): **very simple**, **simple**, or
-  **complex**.
-
-Any remaining low-risk validation code can be an early stage. The
-approach-deciding viability checks already happened in discovery.
-
-#### Verification and tests
-
-Every plan ends with a verification section. Not an afterthought, not one line
-saying "add tests". This section is what the second agent uses to decide whether
-the change is done.
-
-The bar: **would this test have caught the bug in production?** If the answer is
-"no, because the test only re-checks the mock", the test isn't earning its
-place.
-
-The examples below are illustrative and skew toward one kind of project. Map
-them to the actual stack. Read the repo first: match its test runner, its
-directory layout, and its existing test style. A CLI, a library, and a web
-service each verify differently.
-
-Every plan must include:
-
-- **Unit tests** for pure logic. Adapters, translators, parsing, schema
-  round-tripping. Fine to mock at module boundaries.
-- **Integration tests** that exercise the change against a real, running system.
-  Different projects need different integration tests. If one hasn't been set up
-  yet, the plan should propose it as a discussion point. Prefer a local stack
-  that drives the same path the real client hits: real datastore, real API, real
-  transport.
-- **A named end-to-end scenario.** Not "test happy path". Spell out the concrete
-  flow. Example: "POST to the messages endpoint with a query that triggers tool
-  X, assert the stream contains a `tool_result` event for X followed by a
-  `message` event, then re-fetch the session and assert the block sequence
-  matches."
-
-Ask about verification in discovery, not here. Sample questions:
-
-- What's the single scenario that proves this feature works?
-- Which existing test file is the closest neighbor? Extend it or make a new one?
-- Does this touch persistent state, streaming, or auth? If yes, an integration
-  test against local endpoints is required, not optional. Search or ask for
-  these local testing endpoints.
-- Any manual verification the human wants to run (curl, REPL, MCP client)?
-
-Record the answers in the plan's Q&A and inline the resulting test list into the
-verification section. Name the test files, the fixtures, and the assertions.
-
-Anti-patterns that must not ship in the plan:
-
-- Unit tests only, when the change touches persistent state, streaming, auth, or
-  the agent loop.
-- Tests that mock the thing under test. If the change is in the session store,
-  don't mock the session store.
-- Assertions that only check "no exception raised" for behavior with an
-  observable output.
-- "Add tests" as a bullet with no scenario named.
+Verification matches the stack. The repo's test runner and conventions were
+gathered in Discovery. Pure logic gets unit checks. Anything touching persistent
+state or a live system gets an integration check against the real thing,
+spelled out. The plan names at least one end-to-end scenario with its
+assertions.
 
 ### Checkpoint 3
 
-When the plan is final, tell the user it's ready to implement and print the
-compact instruction (see "The compact boundary"). This is the third and last
-approval checkpoint. Wait for the user to compact and invoke `/orchestrate
-implement`.
+The orchestrator presents the stages as one line each, compressed from the
+block: `N  title  tier  planned: phrase  verify: check`. The user adjusts
+boundaries, not contents.
+Questions about a stage get the same short replies as questions about the
+design. The orchestrator applies an adjustment by editing the stage blocks
+directly, then sends the result back through the critic's check before
+presenting it again.
 
----
+When the user approves, the orchestrator prints the compaction instruction (see
+Resuming and compaction) unless the depth is Collapsed.
 
-## Build phase
+## Phase 4: Build
 
-After Checkpoint 3 and the compact, the central agent delegates the build. It reads
-the plan file as the source of truth and hands each stage to a subagent.
+Build runs against the plan file as the source of truth. Delegates build and
+report. The orchestrator owns the ledger and records.
 
 ### Implement
 
-Delegate stage by stage. The plan is self-contained, so each subagent gets the
-plan file path and its assigned stage.
+For each pending stage, in order:
 
-- **Route by the stage's complexity tier**: see the model roster for the
-  tier-to-model mapping and delegation for how to spawn each.
-- Run stages in dependency order. A stage that depends on an earlier one waits
-  for it.
-- Each subagent implements its stage, runs the stage's tests, and **checks off
-  its to-do items in the plan file** as they land. It returns a short summary of
-  what changed and what passed, not a full diff.
-- The central agent reads the summary, confirms the stage is done, and dispatches
-  the next.
+1. **Build.** The implementer, routed by the stage's tier, gets the plan file
+   path and its stage. It builds the stage, runs the Verify check, and returns a
+   summary of what changed and what passed. Not a diff.
+2. **Review.** The stage reviewer gets the plan file path and the stage, and
+   reads the working-tree diff against `HEAD` itself, scoped to the stage's
+   Touches plus any file the implementer reported touching. It critiques
+   against Planned and against the Cleanup bar, writes findings to scratch,
+   and returns a summary.
+3. **Revise.** The implementer addresses the findings and re-runs Verify. Up to
+   two review rounds per stage. A review with no findings is still the pass.
+   Findings still open after two rounds are appended to
+   `plan/scratch/{plan-name}/carried.md`, which the Cleanup reviewers get, not
+   silently dropped.
+4. **Record.** The orchestrator confirms the check passed, ticks the box, and
+   writes the Outcome line (see The plan file), at the altitude of components
+   and responsibilities, not files. It records divergence from Planned
+   honestly.
+   When a divergence moves code, it updates layer 4. Layers 1 to 3 stay as
+   approved, so the final report can show where reality left them. The
+   implementer never writes the Outcome.
 
-Put a progress-tracking line near the top of the plan's stages section so the
-implementing agents know to check off items: "Check off each item in this file
-as you complete it."
+A stage is checked off when it is settled, not only when it landed as planned.
 
 ### Cleanup
 
-After the stages land, delegate a review of the actual work. Catch refactoring,
-dead code, and inconsistency the stage-by-stage build missed. Fixes flow back
-through the plan file as new stages, so the cleanup work uses the same delegate
-and check-off loop as the implement phase.
+After the stages land, the orchestrator delegates a review of the whole change.
+The stage-by-stage build misses what only the whole shows: duplicated logic
+across stages, naming drift, dead branches, leftover scratch.
 
-**Step 1: Review.** Same fan-out as the review phase, but against the landed
-changes instead of the plan. Launch Sonnet 5 and GLM 5.2 in parallel, each
-writes findings to a file (for example `./tmp/cleanup-<model>.md`) and returns a
-summary plus the path. Look for leftover scratch code, duplicated logic across
-stages, dead branches, naming drift, and anything that doesn't match the plan's
-intent.
+1. **Review.** Sonnet and GLM in parallel, each against the diff of the
+   whole change, the plan file, and `carried.md`. Each writes findings to
+   scratch and returns a summary.
+2. **Triage.** The orchestrator dedupes and triages the findings itself
+   against the bar below. Not every finding is valid. Only a finding that
+   would change a design decision goes to the user, through `AskUserQuestion`,
+   and the answer is appended to layer 3. Line-level findings are the
+   orchestrator's call.
+3. **Append.** The orchestrator writes accepted findings as new stage blocks
+   with a tier and a Verify check, marked added in the title (see Stage
+   blocks), and appends them to the plan file. Group related findings, not one
+   stage per one-line fix.
+4. **Fix.** The added stages run through Implement.
 
-**Step 2: Triage.** The central agent reads the findings files, dedupes, and
-triages with the user via `AskUserQuestion`. Not every finding is valid.
-Decide which ones become fix work.
+The bar every reviewer holds the code to, on top of the repo's own conventions:
 
-**Step 3: Append follow-up stages.** For the findings the user accepts, add new
-stages to the bottom of the plan file's stages section. Don't fix inline from
-the central agent.
+- Functions are small and traceable, with shallow nesting and one job each.
+- No comment narrates the line below it. A comment exists only for a quirk the
+  reader can't infer: a rejected alternative, a required ordering, a magic
+  value's source.
+- Docstrings lead with what the unit does, in the imperative. They describe
+  behavior, not placement. They restate nothing the signature already says.
+- Comments and docstrings are self-contained. No references to plans, stages,
+  phases, "the new X", or anything a future reader without this conversation
+  can't follow.
+- Arguments are named at call sites when a call takes more than one and the
+  role isn't obvious.
+- Naming follows the language's convention and the repo's existing style.
+- No dead code or leftover scratch. No duplicated logic across stages.
+- The repo's own lint and test commands have been run, as its own instructions
+  specify.
 
-- Write each follow-up stage in the same format as an implement stage: a
-  markdown to-do checklist of concrete steps, tagged with a complexity tier
-  (very simple, simple, complex) for model routing.
-- Group related findings into one stage. Don't make a stage per one-line fix.
-- Label the group clearly (for example `## Stage F1: cleanup follow-ups`) so
-  it's obvious these came from review, not the original plan.
+### Final report
 
-**Step 4: Fix.** Delegate the follow-up stages exactly like the implement phase.
+The reporter (Sonnet) reads the plan file and the landed code and writes
+`plan/scratch/{plan-name}/report.md`: for every layer 2 component, whether it
+exists and matches its responsibility. Whether the primary path holds. Any
+landed code that maps to no component, listed as unmapped. For every stage,
+Planned against Outcome.
 
-- Route by complexity tier (see the model roster), same as implement.
-- Each subagent implements its stage, runs the relevant tests, and checks off
-  its to-do items in the plan file. It returns a short summary.
-- The central agent confirms each stage is done before dispatching the next.
+The orchestrator presents one line first: everything landed as approved, or
+these stages diverged. Then the divergences and unmapped code, one line each.
+The user asks about the ones that matter and decides whether the work lands.
+If it doesn't, the reasons become added stages, Build resumes at Cleanup's Fix
+step, and the report is rewritten when they land. Or the user stops there.
 
-Re-run Step 1 if a fix stage is large enough to warrant another look. Small
-fixes don't need another review round.
+## The plan file
 
----
+The plan file lives at `plan/{plan-name}.md`. It is the record the agents keep
+and the source of truth after Checkpoint 3. It is written incrementally:
+Whiteboard creates it, Plan appends the stages, Build fills the outcomes and
+appends added stages. It is never a phase of its own.
 
-## What the plan file should look like
+The file is dual-audience. Agents read all of it. The user reads slices of it
+in chat. So it uses one terse notation throughout, and every block the
+orchestrator shows the user is copied from it.
 
-- Context section up top: why this change, what problem it solves, intended
-  outcome.
-- "What defines success" section: the concrete, observable criteria that prove
-  the feature works. Separate from the verification section, which lists the
-  tests that check those criteria.
-- Q&A record from discovery (and follow-up rounds), plus viability spike results.
-- Concrete interface and code-shape decisions from the design phase: signatures,
-  names, file layout, data shapes.
-- Named files, classes, functions to be touched or created, with requirements
-  per unit.
-- Reused utilities and functions called out with paths so the implementer
-  doesn't reinvent them.
-- Verification section: unit tests, integration tests against a live local
-  endpoint, and the named end-to-end scenario. See "Verification and tests".
-- Progress-tracking instruction near the top of the stages section.
-- Stages as markdown checklists at the bottom, each tagged with a complexity
-  tier (very simple, simple, or complex) for model routing.
+### Structure
 
-## What to avoid
+```
+# {plan-name}
 
-- Time estimates. Ever.
-- Line-by-line code in the plan.
-- Dumping a wall of questions in prose. Use the tool, with a context brief
-  before it.
-- Asking open-ended questions with no options, or options with no trade-off
-  `description`, or no recommended option. See the discovery phase.
-- Drafting the plan before Checkpoint 2.
-- Writing the full plan on top of an unvalidated load-bearing assumption. Spike
-  it first.
+## Context
+one paragraph: the problem, who asked, the intended outcome
+
+## Success criteria
+- one observable criterion per line
+
+## Discovery record
+- decision or constraint per line, with the anchor that grounds it
+- spike verdicts per line
+
+## Design
+
+### 1. Approach
+under 100 words: the problem, the shape of the solution, why this shape
+
+### 2. Components and flow
+Component   what it owns
+Component   what it owns
+
+primary:   A: does x -> B: does y -> C: does z
+alternate: A: does x -> B: fails -> A: rejects
+state:     Thing   owned by Component
+
+### 3. Decisions
+Q  the question
+A  the two-line answer
+   changed: what moved  |  settled  |  open: resolved by user, chose X because Y
+
+### 4. Map to code
+Component   path/to/module, path/to/other
+Component   path/to/new (proposed)
+
+## Stages
+- [ ] **Stage 1: title**  tier: simple
+  - Planned: the intent
+  - Verify: the named check
+  - Touches: files
+  - Outcome: pending
+- [ ] **Stage 4: title**  tier: very simple  added: why it was needed
+  - Planned: ...
+```
+
+Notation rules:
+
+- A linear path is one arrow line. Anything non-linear is a small Mermaid
+  flowchart with labeled edges, a dozen nodes at most, placed under the arrow
+  lines. No invented notation beyond these.
+- Components are named by responsibility, never by filename. Filenames live in
+  layer 4 only.
+- Layers 1 to 3 are mandatory and short. Layer 4 is reference. A design with
+  more than a dozen components is a signal to decompose.
+- Layer 3 grows during Checkpoint 2. Every user follow-up and its answer is
+  appended.
+
+### Stage blocks
+
+Planned and Outcome sit in the same block so divergence is visible at a glance.
+The checkbox means settled, not done as planned. Outcome opens with a keyword:
+
+- `done`: built as planned, the Verify check passes. One line.
+- `done-modified`: completed but diverged. Says what changed and why.
+- `dropped`: decided against during Build. Says why. Settled, so `[x]`.
+- `pending`: not built yet. `[ ]`.
+
+A stage that was not in the approved plan carries `added: why` on its title
+line and uses the same Outcome keywords as any other stage.
+
+As-planned costs one line. Divergence is the only thing that costs prose. Who
+writes the Outcome is fixed in Implement.
+
+## Anti-patterns
+
+- Time estimates.
+- Line-by-line code in the plan. Layer 4 names files, it does not write them.
+- A wall of questions in prose. Use `AskUserQuestion`, with a short context
+  block before it.
+- Open-ended questions through the tool, or options with no trade-off, or no
+  recommendation.
+- Designing on top of an unchecked assumption that would change the approach.
+  Spike it first.
+- Presenting a design as a document to read instead of a pitch and questions.
+- A critic that writes a review instead of questions.
+- Components named by file. The user thinks in responsibilities.
+- A stage list the user never approved.
 - Over-splitting stages into trivia.
-- References to other plan files inside the code itself. If context matters,
-  inline it when writing the code later.
-- Author attribution. Don't put the user's name, "by X", or an "Author:" line
-  anywhere in the plan file. Git handles authorship.
-- Verification sections that stop at "add unit tests". Anything touching
-  persistent state, streaming, auth, or the loop needs an integration test
-  spelled out.
+- Delegates writing their own Outcome lines.
+- Overwriting Planned to match what was built. Divergence goes in Outcome.
+- References to the plan file, stages, or phases inside code, comments, or
+  docstrings.
+- Author attribution in the plan file. Git handles authorship.
+- Verification that stops at "add unit tests."

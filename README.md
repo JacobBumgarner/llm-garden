@@ -25,7 +25,7 @@ marketplace](https://code.claude.com/docs/en/plugin-marketplaces) (`llm-garden`)
 
 | Plugin | Skill | Details |
 | --- | --- | --- |
-| `rubato` | `orchestrate` | A three-stage development workflow that a centralized agent drives. The three stages are: discovery (Q&A plus viability spikes), plan (draft, multi-model review, finalize; produces a planning `.md` file), and build (delegate staged implementation and review/cleanup to subagents). |
+| `rubato` | `orchestrate` | A phased workflow where agents design and build while the user reviews at fixed checkpoints, acting as tech lead rather than author. Four phases: discovery (Q&A and recon), whiteboard (iterated design, presented as a pitch and the questions it survived), plan (staged into ordered, verifiable units), and build (implement, review, cleanup, and a final report against what was approved). |
 | `rubato` | `commit-flow` | Reviews the working-tree diffs and proposes a group of logical commits with descriptions. Designed to ensure LLM code organization is tracked by a human. |
 
 
