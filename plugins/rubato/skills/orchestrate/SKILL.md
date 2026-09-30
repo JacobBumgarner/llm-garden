@@ -160,12 +160,33 @@ shown to them is short, structured, and shaped for a scan, not a read-through.
   prose. That includes the checkpoints: the depths at Checkpoint 1, approve or
   redirect at Checkpoints 2 and 3, land or not at the final report. The tool's
   fields are small, so when a decision needs framing, the orchestrator writes
-  a short context block first, then fires the tool.
+  a question context block first, then fires the tool.
 - The user never has to open the plan file. It exists so the design survives
   compaction, so staging has a source, and so the final report has something
   to check against.
 - For a change to a system the user already knows, the pitch is a delta: what
   changes and why, not a tour of what exists.
+
+#### Question context
+
+The `question` field of `AskUserQuestion` is short and the option cards do most
+of the work. That isn't room to explain a subtle decision, and the user may not
+be the expert on what they're being asked. So before a batch of questions, the
+orchestrator writes one block in normal output, then fires the tool:
+
+```
+## Q1 context
+What the decision is, why it matters, what recon found in the code, and
+what the trade-off hinges on. One or two short paragraphs.
+
+## Q2 context
+...
+```
+
+The block carries the reasoning. The tool carries the decision. A block that
+*is* the questions is still a wall of prose, and still banned. Only decisions
+that need framing get a block: the depths at Checkpoint 1 and an approve or
+redirect at a checkpoint usually don't, an open design question usually does.
 
 Rules for every `AskUserQuestion` call:
 
@@ -259,7 +280,7 @@ The orchestrator checks each dimension. Not every one applies to every task:
 The user may not be the expert on what the orchestrator is asking about. A bare
 "which X?" with four labels is unproductive, so every decision follows the
 `AskUserQuestion` rules (see Showing work to the user): recon first, then a
-grounded choice.
+question context block, then a grounded choice.
 
 ### Recon
 
@@ -339,9 +360,9 @@ copied from the plan file. Under 100 words of prose. For a non-linear design,
 the Mermaid flowchart comes along.
 
 The questions, grouped. Changed first, all of them: the question, the two-line
-answer, and what moved in the design. Open next: put to the user through
-`AskUserQuestion` with the options laid out, in batches of four when there are
-more, most consequential first. Settled last: at most four, taken from the
+answer, and what moved in the design. Open next: a question context block,
+then `AskUserQuestion` with the options laid out, in batches of four when there
+are more, most consequential first. Settled last: at most four, taken from the
 critic's ranking, and always including where the design fails. The rest stay
 in the plan file.
 
@@ -580,7 +601,7 @@ writes the Outcome is fixed in Implement.
 
 - Time estimates.
 - Line-by-line code in the plan. Layer 4 names files, it does not write them.
-- A wall of questions in prose. Use `AskUserQuestion`, with a short context
+- A wall of questions in prose. Use `AskUserQuestion`, with a question context
   block before it.
 - Open-ended questions through the tool, or options with no trade-off, or no
   recommendation.
