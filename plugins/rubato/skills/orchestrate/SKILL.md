@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Run a phased software workflow in which the user sets direction and reviews at fixed checkpoints while the orchestrator designs and builds. Deep Q&A, a design the agents grill before the user sees it, staged build with cleanup, and a review of what was built against what was approved. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Run `/orchestrate implement` after compaction to build the approved plan.
+description: Run a phased software development workflow in which the user sets direction and reviews at fixed checkpoints while the orchestrator designs and builds. Deep Q&A, a design the agents grill before the user sees it, staged build with cleanup, and a review of what was built against what was approved. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Invoke with the argument `implement` after compaction to build the approved plan.
 ---
 
 # Orchestrate
@@ -42,7 +42,7 @@ Eight steps, three checkpoints. A checkpoint is a hard stop for user approval.
 7. **Build.** Per stage: an implementer builds, a cleanup reviewer edits the
    result into shape, the orchestrator records the outcome.
 8. **Hand-off.** Reviewers read the whole change against the plan. The user
-   sends it to `/commit-flow` or names what becomes further stages.
+   sends it to the `commit-flow` skill or names what becomes further stages.
 
 A **stage** is one buildable unit of the plan. That is the only meaning of
 "stage" here. A **component** is defined in The plan file.
@@ -69,12 +69,13 @@ write an Outcome. Independent delegates run concurrently, sent in one message.
 
 ### Models
 
-Use GLM, `subagent_type: "glm"`, whenever it is available: for all recon, and
-for a stage whose Planned is mechanical. A review runs on a different model
-class than the work it reviews, so a Sonnet build gets an Opus reviewer and a
-GLM build gets a Sonnet or Opus one. Spawn Claude delegates with `subagent_type:
-"claude"` and `model: "sonnet"` or `"opus"`. Otherwise the delegate inherits the
-session model.
+Delegates run through whatever subagent or task-delegation tool the host
+provides. Use the cheapest capable model the host offers for all recon and for a
+stage whose Planned is mechanical. A review runs on a different model class
+than the work it reviews, so a mid-tier build gets a top-tier reviewer and a
+cheap build gets a mid- or top-tier one. When the delegation tool accepts a
+model or agent selector, set it per the above; otherwise the delegate inherits
+the session model.
 
 ### Prose
 
@@ -98,9 +99,9 @@ briefs. Pass them into any brief whose output the user will read.
 
 The user's attention is the scarcest thing in the workflow.
 
-- The first line of every message to the user is the step marker: `Step N of 8,
-  name. plan/{plan-name}.md`. A transition names both: `Step 3 done, entering
-  step 4.`
+- Mark the step only when it changes. On entering a step, the first line is
+  `Step N of 8, name. plan/{plan-name}.md`, and a transition names both: `Step 3
+  done, entering step 4.` Messages within a step don't repeat the marker.
 - Everything shown at a checkpoint is a copy from above the fold of the plan
   file, in a fenced block, with at most one framing sentence above it.
 - A decision the user arbitrates goes through `AskUserQuestion`, never prose.
@@ -120,16 +121,19 @@ The user's attention is the scarcest thing in the workflow.
 At Checkpoint 3 the orchestrator prints, every run:
 
 > Plan approved at `plan/{plan-name}.md`. Run `/compact focus on the plan file
-> at plan/{plan-name}.md and the pending stages`, then run `/orchestrate
-> implement`.
+> at plan/{plan-name}.md and the pending stages`, then invoke this skill with
+> the argument `implement`.
+
+In Claude Code that is `/orchestrate implement`; in pi it is `/skill:orchestrate
+implement`.
 
 Build works from the plan file, not from the orchestrator's memory of the
 debate, or Outcomes drift toward what was argued instead of what was approved. A
 controlled compaction here also beats an automatic one mid-stage.
 
-`/orchestrate` with no argument starts at step 1, or resumes a plan in `plan/`
-whose `step:` line matches the request. `/orchestrate implement` resumes at step
-7. A plan in `plan/done/` is never resumed.
+Invoked with no argument, the skill starts at step 1, or resumes a plan in
+`plan/` whose `step:` line matches the request. Invoked with `implement`, it
+resumes at step 7. A plan in `plan/done/` is never resumed.
 
 ## Step 1 and 2: Request and Q&A
 
@@ -144,7 +148,7 @@ failure modes, prior art in the repo, and what verification the user expects.
 Every decision follows the question rules in Showing work: recon first, context
 block, grounded choice.
 
-Throughout, GLM recon runs in the background: how a subsystem works, where a
+Throughout, cheap-model recon runs in the background: how a subsystem works, where a
 thing is defined and who calls it, what pattern the repo uses. Recon briefs are
 read-only and ask for Findings, Relevant files, and Open questions, written to
 `plan/scratch/{plan-name}/recon-{topic}.md`. The orchestrator verifies a recon
@@ -276,8 +280,8 @@ A divergence the reviewers find that no Outcome records is a hole in the ledger.
 The orchestrator corrects that Outcome before presenting. Then it shows one
 line, everything built as approved or these stages diverged, followed by the
 divergences and unmapped code, one entry each. The user asks about the ones that
-matter and chooses: `/commit-flow`, or the findings that become further stages,
-and Build resumes at step 7.
+matter and chooses: the `commit-flow` skill, or the findings that become
+further stages, and Build resumes at step 7.
 
 When the commits are merged, the run ends. The orchestrator sets `step:
 merged`, moves the plan and its sub-plans to `plan/done/`, and deletes
@@ -403,4 +407,4 @@ why` on its title line. Only the orchestrator writes Outcomes.
 - Time estimates.
 - A delegate writing an Outcome, or committing.
 - References to the plan, stages, or steps inside code or docstrings.
-- A message to the user that doesn't open with the step marker.
+- A message that re-announces the current step when it hasn't changed.
