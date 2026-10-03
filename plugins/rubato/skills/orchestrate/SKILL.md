@@ -124,9 +124,6 @@ At Checkpoint 3 the orchestrator prints, every run:
 > at plan/{plan-name}.md and the pending stages`, then invoke this skill with
 > the argument `implement`.
 
-In Claude Code that is `/orchestrate implement`; in pi it is `/skill:orchestrate
-implement`.
-
 Build works from the plan file, not from the orchestrator's memory of the
 debate, or Outcomes drift toward what was argued instead of what was approved. A
 controlled compaction here also beats an automatic one mid-stage.
