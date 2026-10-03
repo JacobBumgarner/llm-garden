@@ -1,0 +1,14 @@
+{
+  "name": "llm-garden",
+  "version": "0.7.0",
+  "description": "Jacob Bumgarner's agent skills: orchestrate (phased plan-and-build workflow) and commit-flow (carve a diff into clean commits).",
+  "author": "Jacob Bumgarner",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JacobBumgarner/llm-garden"
+  },
+  "keywords": ["pi-package", "agent-skills"],
+  "pi": {
+    "skills": ["./plugins/*/skills"]
+  }
+}
