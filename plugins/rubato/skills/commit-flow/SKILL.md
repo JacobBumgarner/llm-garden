@@ -69,21 +69,21 @@ plan doc, if it changed, is always the last row.
 | 3 | Unit tests for the batch iterator |
 | 4 | Plan doc for the batch streaming work |
 
-Then, one section per commit. Each section has a bold heading, two short
-summaries of the change, and a `git add` block that stages exactly those files.
-The first summary is technical: what changed, in the terms the code uses. The
-second is plain English: what a reader with no context would understand the
-commit to do. The `git add` block puts one file per line with `\` continuations,
-so it doubles as the file list and is easy to scan.
+Then, one section per commit. Each section has a bold heading, a description
+of the change, an `In short:` recap, and a `git add` block that stages exactly
+those files. The description is technical: what changed, in the terms the code
+uses. The recap is plain English: what a reader with no context would
+understand the commit to do. The `git add` block puts one file per line with
+`\` continuations, so it doubles as the file list and is easy to scan.
 
 **Commit 1 — Stream the feature pipeline in batches**
 
-*Technical:* Rework the feature pipeline to stream batches from the loader
-instead of holding the whole frame in memory. `transforms.py` moves to lazy
-column ops, and `loader.py` yields batches the pipeline pulls on demand.
+Rework the feature pipeline to stream batches from the loader instead of
+holding the whole frame in memory. `transforms.py` moves to lazy column ops,
+and `loader.py` yields batches the pipeline pulls on demand.
 
-*Plain English:* The feature step used to load all the data at once, which
-filled up memory on large runs. Now it processes the data in chunks.
+In short: the feature step used to load everything at once and ran out of
+memory on big runs. Now it works in chunks.
 
 ```
 git add \
@@ -109,10 +109,11 @@ Rules for the proposal:
   `git status` (new or modified), it is its own commit and it is the final
   one, after every test commit. Never fold it into a source, docs, or test
   group. If the plan doc didn't change, there is no plan commit.
-- **Two summaries, both short.** The technical summary is a sentence or two
-  in the code's own terms, with paths and identifiers in backticks. The plain
-  English summary is a sentence or two with no jargon. Label them *Technical:*
-  and *Plain English:*.
+- **Description, then `In short:`.** The description is in the code's own
+  terms, with paths and identifiers in backticks. Use as many paragraphs as
+  the change needs, but stay tight. Then a paragraph starting with
+  `In short:` that restates it with no jargon. The recap is the only labeled
+  part; don't label the description.
 - **No separate file list.** Don't bullet the files or put them in a table
   cell, and don't use `<br>`, `<ul>`, or `<li>` tags. Claude Code's terminal
   renderer can't render them. The `git add` block is the list.
