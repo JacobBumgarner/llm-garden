@@ -76,15 +76,13 @@ Talk with the human about tests ahead of implementation to align on development
 contracts. Tests are paramount for stability, but they must be meaningful and
 targeted. All code should have clearly discussed success criteria.
 
-- Test runner: `pytest` + `pytest-asyncio`.
+- Test runner: `pytest`.
 - Run tests with: `uv run pytest` (not `uvx pytest`, pytest needs to import the
   project).
 - Run a single test file: `uv run pytest tests/unit/test_foo.py`
-- Run the dev server: `uv run delphi-api` (or `uv run delphi-local` to bring up
-  Postgres + DB + API in one shot).
-- Unit tests `tests/unit` should contain pure logical tests, and integration
-  tests `tests/integration` should be used for anything that touches real
-  endpoints or real data.
+- `tests/unit` holds pure logic with no I/O. Anything that touches disk,
+  subprocesses, services, or real data goes in a higher tier. The repo's own
+  test notes define the tiers and what each may touch.
 
 ## Contributing
 Feature branches off `main` using prefixes: `feat/`, `fix/`, `refactor/`,
