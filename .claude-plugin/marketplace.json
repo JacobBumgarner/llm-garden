@@ -9,8 +9,7 @@
     {
       "name": "rubato",
       "source": "./plugins/rubato",
-      "description": "The plan-build-commit loop in one plugin: orchestrate drives a phased workflow to a self-contained plan and delegates the build, then commit-flow carves the diff into clean commits.",
-      "version": "0.7.0"
+      "description": "The plan-build-commit loop in one plugin: orchestrate drives a phased workflow to a self-contained plan and delegates the build, then commit-flow carves the diff into clean commits."
     }
   ]
 }
