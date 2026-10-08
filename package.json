@@ -1,14 +1,31 @@
 {
   "name": "llm-garden",
-  "version": "0.7.0",
-  "description": "Jacob Bumgarner's agent skills: orchestrate (phased plan-and-build workflow) and commit-flow (carve a diff into clean commits).",
+  "version": "0.8.0",
+  "description": "Jacob Bumgarner's agent skills and pi extensions: orchestrate and commit-flow skills, plus ask, subagent, rename, session-title, stash, focus-mode, footer, and final-marker extensions.",
   "author": "Jacob Bumgarner",
   "repository": {
     "type": "git",
     "url": "https://github.com/JacobBumgarner/llm-garden"
   },
-  "keywords": ["pi-package", "agent-skills"],
+  "keywords": [
+    "pi-package",
+    "agent-skills"
+  ],
   "pi": {
-    "skills": ["./plugins/*/skills"]
-  }
+    "extensions": [
+      "./plugins/*/extensions/index.ts"
+    ],
+    "skills": [
+      "./plugins/*/skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "test": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.test.ts'"
+  },
+  "type": "module"
 }
