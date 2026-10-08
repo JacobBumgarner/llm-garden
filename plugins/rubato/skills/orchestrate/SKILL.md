@@ -105,9 +105,13 @@ The user's attention is the scarcest thing in the workflow.
 - Everything shown at a checkpoint is a copy from above the fold of the plan
   file, in a fenced block, with at most one framing sentence above it.
 - A decision the user arbitrates goes through `AskUserQuestion`, never prose.
-  Before the call, write a short context block for each question that needs
-  framing: what the decision is, what recon found, what the trade-off hinges on.
-  The block carries the reasoning, the tool carries the choice.
+  Every question gets a context block: what the decision is, what recon found,
+  what the trade-off hinges on. The user sees none of your thinking, so a block
+  written only while thinking was never shown. When the question tool has a
+  context field, the block goes there; otherwise it goes in visible reply text
+  before the call. Name things in full, never "the first two" or a list the
+  user hasn't seen. The block carries the reasoning, the tool carries the
+  choice.
 - Every option names its trade-off. Recommend one, put it first, append
   `(Recommended)`, and tie the reason to a constraint the user gave. Cite the
   anchor. Options are real and exclusive. If two real options can't be named, do
@@ -190,7 +194,7 @@ A question whose answer was "no change" stays in the record.
 
 **Checkpoint 2.** The orchestrator shows the page above the fold: Summary,
 Scope, Design, Decisions. Any question still open goes through `AskUserQuestion`
-with a context block. The user follows up on anything thin, and every follow-up
+with its context block. The user follows up on anything thin, and every follow-up
 and its answer is appended to the Review record. A follow-up that changes the
 design sends the affected part back through step 4. When nothing is open, the
 orchestrator asks whether the design is approved.
