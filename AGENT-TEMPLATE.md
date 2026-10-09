@@ -37,9 +37,9 @@ builtin/stdlib methods with well-known signatures stay positional: `len(items)`,
 `Path(config_path)`, `cfg.get("host", "localhost")`.
 
 ## Linting & docstrings
-Ruff (installed globally via `uv`) enforces imports, modern syntax, docstrings
+Ruff enforces imports, modern syntax, docstrings
 (`D`), and signature type annotations (`ANN`) -- see the full rule set in
-`pyproject.toml`. Run `uvx ruff check . --fix` and `uvx ruff format .`. Use
+`pyproject.toml`. Run `uv run ruff check . --fix` and `uv run ruff format .`. Use
 `--fix` for auto-fixable lints; surface the rest for human review rather than
 suppressing.
 
@@ -69,7 +69,7 @@ Beyond linting:
 - Follow PEP 8 naming - `CamelCase` classes, `snake_case` functions/variables -
   matching an external API's casing only when wrapping it directly.
 
-Pre-commit hooks can be run via `uvx prek run -a` or `uvx prek run -f <file>`.
+Pre-commit hooks can be run via `uv run prek run -a` or `uv run prek run -f <file>`.
 
 ## Testing
 Talk with the human about tests ahead of implementation to align on development
@@ -89,7 +89,7 @@ Feature branches off `main` using prefixes: `feat/`, `fix/`, `refactor/`,
 `maint/`, `doc/`, `test/`, `junk/`. PRs require review from at least one team
 member before merging.
 
-**After finishing work, run `uvx prek run -a`.** Don't rely on git's pre-commit
+**After finishing work, run `uv run prek run -a`.** Don't rely on git's pre-commit
 hook firing, as it only runs if the developer has separately run `uv run prek
 install`, and agent sessions usually have not. A commit that hasn't been through
 `prek run -a` is not done. Run `uv run pytest` before opening a PR.
