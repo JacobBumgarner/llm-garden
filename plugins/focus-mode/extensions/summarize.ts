@@ -96,44 +96,50 @@ function tokens(n: unknown): string | undefined {
 	return `${(n / 1000000).toFixed(1)}M`;
 }
 
-/** Name of the most recent tool the subagent called, from its last assistant message. */
-function lastToolCall(messages: unknown[]): string | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = asRecord(messages[i]);
-		if (msg.role !== "assistant") continue;
-		const calls = asArray(msg.content)
-			.map(asRecord)
-			.filter((block) => block.type === "toolCall");
-		const last = calls.at(-1);
-		if (last) return str(last.name);
-	}
-	return undefined;
-}
-
-/** Live progress for one subagent result: turns, tokens, cost, and the tool it last called. */
-function subagentProgress(r: Record<string, unknown>, running: boolean): string[] {
-	const usage = asRecord(r.usage);
+/** Turns, tokens, and cost from a run's usage, skipping the parts that are zero. */
+function usageParts(usage: Record<string, unknown>): string[] {
 	const parts: string[] = [];
 	if (typeof usage.turns === "number" && usage.turns > 0) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
 	const up = tokens(usage.input);
 	const down = tokens(usage.output);
 	if (up || down) parts.push([up && `↑${up}`, down && `↓${down}`].filter(Boolean).join(" "));
+	return parts;
+}
+
+/** Progress text for one run snapshot: usage and last tool while running, usage and the state word otherwise. */
+function runProgress(run: Record<string, unknown>): string[] {
+	const usage = asRecord(run.usage);
+	const parts = usageParts(usage);
+	if (run.state !== "running") return [...parts, str(run.state) ?? ""].filter(Boolean);
 	if (typeof usage.cost === "number" && usage.cost > 0) parts.push(`$${usage.cost.toFixed(2)}`);
-	const tool = running ? lastToolCall(asArray(r.messages)) : undefined;
+	const tool = str(asRecord(run.lastTool).name);
 	if (tool) parts.push(`→ ${tool}`);
 	return parts;
 }
 
+/** Join a run's identity and trailing parts into one `subagent` line. */
+function runLine(agent: string | undefined, label: string | undefined, rest: string[]): string {
+	return [`subagent ${agent ?? ""}`.trimEnd(), ...(label ? [label] : []), ...rest].join(" · ");
+}
+
+/** Lines for a call that has no result details yet, built from its arguments. */
+function subagentArgsLines(args: Record<string, unknown>): string[] {
+	const tasks = asArray(args.tasks).map(asRecord);
+	if (tasks.length > 0) return tasks.map((task) => runLine(str(task.agent), str(task.label), []));
+	const action = str(args.action);
+	if (action === undefined || action === "start") return [runLine(str(args.agent), str(args.label), [])];
+	const ids = asArray(args.ids).filter((id): id is string => typeof id === "string");
+	const target = str(args.id) ?? ids.join(" ");
+	const label = str(args.label);
+	return [withName(withName("subagent", action), target) + (label ? ` · ${label}` : "")];
+}
+
 function summarizeSubagent(item: ToolItem, running: boolean): string[] {
-	const details = asRecord(item.result?.details);
-	const results = asArray(details.results).map(asRecord);
-	if (results.length === 0) {
-		return [mark(withName("subagent", firstStringArg(item.args)), running)];
-	}
-	return results.map((r) => {
-		const base = [`subagent ${str(r.agent) ?? ""}`, ...subagentProgress(r, running)].join(" · ");
-		const failed = typeof r.exitCode === "number" && r.exitCode !== 0;
-		return mark(failed ? `${base} error` : base, running);
+	const runs = asArray(asRecord(item.result?.details).runs).map(asRecord);
+	if (runs.length === 0) return subagentArgsLines(item.args).map((line) => mark(line, running));
+	return runs.map((run) => {
+		const base = runLine(str(run.agent), str(run.label), runProgress(run));
+		return mark(run.state === "failed" ? `${base} error` : base, running);
 	});
 }
 

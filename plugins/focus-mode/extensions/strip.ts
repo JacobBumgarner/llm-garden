@@ -51,13 +51,11 @@ export function resultText(content: unknown): string {
 		.join("\n");
 }
 
-/** `4.2s` / `1m 05s`, or undefined when unknown or too short to matter. */
-export function durationLabel(state: { startedAt?: number; endedAt?: number }): string | undefined {
-	if (state.startedAt === undefined || state.endedAt === undefined) return undefined;
-	const ms = state.endedAt - state.startedAt;
-	if (ms < DURATION_MIN_MS) return undefined;
+/** `4s` / `1m 05s`, or undefined when unknown or too short to matter. */
+export function durationLabel(ms: number | undefined): string | undefined {
+	if (ms === undefined || ms < DURATION_MIN_MS) return undefined;
 	const seconds = ms / 1000;
-	if (seconds < 60) return `${seconds.toFixed(1)}s`;
+	if (seconds < 60) return `${Math.round(seconds)}s`;
 	const minutes = Math.floor(seconds / 60);
 	return `${minutes}m ${String(Math.round(seconds % 60)).padStart(2, "0")}s`;
 }

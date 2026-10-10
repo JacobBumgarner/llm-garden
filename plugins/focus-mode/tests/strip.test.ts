@@ -52,11 +52,12 @@ describe("resultText", () => {
 
 describe("durationLabel", () => {
 	it("hides short and unknown durations", () => {
-		assert.equal(durationLabel({}), undefined);
-		assert.equal(durationLabel({ startedAt: 0, endedAt: 1999 }), undefined);
+		assert.equal(durationLabel(undefined), undefined);
+		assert.equal(durationLabel(1999), undefined);
 	});
 	it("formats seconds and minutes", () => {
-		assert.equal(durationLabel({ startedAt: 0, endedAt: 4200 }), "4.2s");
-		assert.equal(durationLabel({ startedAt: 0, endedAt: 65_000 }), "1m 05s");
+		assert.equal(durationLabel(4200), "4s");
+		assert.equal(durationLabel(4600), "5s");
+		assert.equal(durationLabel(65_000), "1m 05s");
 	});
 });

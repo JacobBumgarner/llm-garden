@@ -61,32 +61,55 @@ describe("summarize", () => {
 		]);
 	});
 
-	it("renders one line per subagent result with an error marker", () => {
-		const details = {
-			results: [
-				{ agent: "scout", task: "find it", exitCode: 0 },
-				{ agent: "worker", task: "do it", exitCode: 1 },
-			],
-		};
-		assert.deepEqual(summarize(tool("subagent", {}, done(details))), [
-			"subagent scout",
-			"subagent worker error",
+	it("shows an args-only subagent start as agent and label", () => {
+		const args = { action: "start", agent: "scout", label: "Find the bug", task: "look" };
+		assert.deepEqual(summarize(tool("subagent", args)), ["… subagent scout · Find the bug"]);
+	});
+
+	it("shows one line per task in a tasks array", () => {
+		const tasks = [
+			{ label: "Scan A", agent: "scout", task: "a" },
+			{ label: "Scan B", agent: "worker", task: "b" },
+		];
+		assert.deepEqual(summarize(tool("subagent", { action: "start", tasks })), [
+			"… subagent scout · Scan A",
+			"… subagent worker · Scan B",
 		]);
 	});
 
-	it("shows subagent turns, tokens, cost, and the running tool", () => {
-		const messages = [
-			{ role: "assistant", content: [{ type: "toolCall", name: "read" }] },
-			{ role: "toolResult", content: [] },
-			{ role: "assistant", content: [{ type: "text", text: "hm" }, { type: "toolCall", name: "bash" }] },
-		];
-		const usage = { input: 12345, output: 1100, cost: 0.0412, turns: 2 };
-		const running = { text: "", details: { results: [{ agent: "scout", task: "find it", usage, messages }] }, isError: false, partial: true };
-		assert.deepEqual(summarize(tool("subagent", {}, running)), [
-			"… subagent scout · 2 turns · ↑12k ↓1.1k · $0.04 · → bash",
+	it("shows a wait call by action and ids", () => {
+		assert.deepEqual(summarize(tool("subagent", { action: "wait", ids: ["a1", "b2"] })), ["… subagent wait a1 b2"]);
+		assert.deepEqual(summarize(tool("subagent", { action: "stop", id: "a1", label: "Scan" })), [
+			"… subagent stop a1 · Scan",
 		]);
-		const finished = done({ results: [{ agent: "scout", task: "find it", exitCode: 0, usage, messages }] });
-		assert.deepEqual(summarize(tool("subagent", {}, finished)), ["subagent scout · 2 turns · ↑12k ↓1.1k · $0.04"]);
+	});
+
+	it("shows a running run with turns, tokens, cost, and its last tool", () => {
+		const usage = { input: 12345, output: 1100, cost: 0.0412, turns: 2 };
+		const run = { agent: "scout", label: "Find it", state: "running", usage, lastTool: { name: "bash", args: {} } };
+		const partial = { text: "", details: { action: "start", view: "x", runs: [run] }, isError: false, partial: true };
+		assert.deepEqual(summarize(tool("subagent", {}, partial)), [
+			"… subagent scout · Find it · 2 turns · ↑12k ↓1.1k · $0.04 · → bash",
+		]);
+	});
+
+	it("shows a done run with its state word and keeps turns and tokens", () => {
+		const usage = { input: 12345, output: 1100, cost: 0.0412, turns: 2 };
+		const run = { agent: "scout", label: "Find it", state: "done", usage, lastTool: { name: "bash", args: {} } };
+		assert.deepEqual(summarize(tool("subagent", {}, done({ runs: [run] }))), [
+			"subagent scout · Find it · 2 turns · ↑12k ↓1.1k · done",
+		]);
+	});
+
+	it("marks a failed run with an error suffix, one line per run", () => {
+		const runs = [
+			{ agent: "scout", label: "One", state: "done", usage: { turns: 1, input: 10, output: 5 } },
+			{ agent: "worker", label: "Two", state: "failed", usage: { turns: 3, input: 2000, output: 500 } },
+		];
+		assert.deepEqual(summarize(tool("subagent", {}, done({ runs }, true))), [
+			"subagent scout · One · 1 turn · ↑10 ↓5 · done",
+			"subagent worker · Two · 3 turns · ↑2.0k ↓500 · failed error",
+		]);
 	});
 
 	it("falls back to name and first string argument", () => {

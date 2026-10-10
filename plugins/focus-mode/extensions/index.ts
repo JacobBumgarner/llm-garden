@@ -3,8 +3,9 @@
  *
  * Toggle with /focus or ctrl+shift+o. While on, a tool renderer resolver replaces the renderers of
  * every tool, registered or not, with a strip that shows the summary from `summarize.ts`; a click
- * expands it to the arguments and capped result text. Off, the resolver hands back whatever pi
- * would have used. The transcript, scrolling, images, and search stay pi's own.
+ * expands it to the arguments and capped result text (the colored diff for an edit). A running strip
+ * redraws once a second so its elapsed time and any streamed progress stay current; a finished one
+ * shows the duration pi recorded. Off, the resolver hands back whatever pi would have used. The transcript, scrolling, images, and search stay pi's own.
  *
  * Thinking blocks stay visible; pi's `hideThinkingBlock` setting (toggled with ctrl+t, or by
  * clicking a run) is the only thing that collapses them, and the extension API offers no per-mode
@@ -33,20 +34,36 @@ const STRIP_BG: Record<StripColor, "toolPendingBg" | "toolSuccessBg" | "toolErro
 	error: "toolErrorBg",
 };
 
-/** Shared per-call renderer state: the result the strip reads at render time, and render-time timing. */
+/** How often a running strip redraws so its elapsed time ticks. */
+const TICK_MS = 1000;
+
+/**
+ * Shared per-call renderer state: the result the strip reads at render time, when execution was first
+ * seen running, and the final duration pi recorded for the call.
+ */
 interface StripState {
 	result?: ToolItem["result"];
 	expanded?: boolean;
 	startedAt?: number;
-	endedAt?: number;
+	durationMs?: number;
 }
 
 /** The context fields the renderers read; `ToolRenderContext` itself is not exported by pi. */
 interface StripContext {
+	toolCallId: string;
 	state: StripState;
 	expanded: boolean;
 	isError: boolean;
 	executionStarted: boolean;
+	durationMs: number | undefined;
+	invalidate: () => void;
+}
+
+/** Elapsed time to show: the recorded duration once final, else the wall clock since execution began. */
+function elapsedMs(state: StripState): number | undefined {
+	if (state.durationMs !== undefined) return state.durationMs;
+	if (state.startedAt === undefined) return undefined;
+	return Date.now() - state.startedAt;
 }
 
 /**
@@ -73,7 +90,7 @@ class Strip implements Component {
 		const inner = Math.max(1, width - STRIP_PAD.length);
 		const marker = color === "muted" ? RUNNING : DONE;
 		const indent = " ".repeat(marker.length);
-		const duration = color === "muted" ? undefined : durationLabel(this.state);
+		const duration = durationLabel(elapsedMs(this.state));
 		const body = summarize(item).map((text, i) =>
 			i === 0
 				? this.summaryLine(text, inner, this.theme.fg(color, marker), marker.length, color, duration)
@@ -148,14 +165,42 @@ function clip(text: string, width: number): string[] {
 	return [truncateToWidth(text, Math.max(0, width - ELLIPSIS.length), ""), ELLIPSIS];
 }
 
+/**
+ * One redraw interval per running tool call, so a strip's elapsed time ticks between result updates.
+ * A ticker stops when the call's final result renders, when pi reports the execution ended, or when
+ * the session shuts down; `stopAll` covers components that were dropped without a final render.
+ */
+class Tickers {
+	private timers = new Map<string, ReturnType<typeof setInterval>>();
+
+	start(toolCallId: string, invalidate: () => void): void {
+		if (this.timers.has(toolCallId)) return;
+		this.timers.set(toolCallId, setInterval(invalidate, TICK_MS));
+	}
+
+	stop(toolCallId: string): void {
+		const timer = this.timers.get(toolCallId);
+		if (timer) clearInterval(timer);
+		this.timers.delete(toolCallId);
+	}
+
+	stopAll(): void {
+		for (const id of [...this.timers.keys()]) this.stop(id);
+	}
+}
+
 /** Renderers for the mode: the strip on the call slot, state capture on the result slot. */
-function focusRenderers(toolName: string, onTheme: (theme: Theme) => void): ToolRenderers {
+function focusRenderers(toolName: string, tickers: Tickers, onTheme: (theme: Theme) => void): ToolRenderers {
 	return {
 		renderShell: "self",
 		renderCall: (args, theme, context: StripContext) => {
 			onTheme(theme);
 			context.state.expanded = context.expanded;
-			if (context.executionStarted) context.state.startedAt ??= Date.now();
+			const running = context.state.result === undefined || context.state.result.partial === true;
+			if (context.executionStarted && running) {
+				context.state.startedAt ??= Date.now();
+				tickers.start(context.toolCallId, context.invalidate);
+			}
 			return new Strip(toolName, (args ?? {}) as Record<string, unknown>, context.state, theme);
 		},
 		renderResult: (result, options, _theme, context: StripContext) => {
@@ -167,8 +212,9 @@ function focusRenderers(toolName: string, onTheme: (theme: Theme) => void): Tool
 			};
 			context.state.expanded = options.expanded;
 			if (!options.isPartial) {
-				context.state.startedAt ??= Date.now();
-				context.state.endedAt ??= Date.now();
+				tickers.stop(context.toolCallId);
+				context.state.durationMs ??=
+					context.durationMs ?? (context.state.startedAt === undefined ? undefined : Date.now() - context.state.startedAt);
 			}
 			return EMPTY;
 		},
@@ -179,10 +225,11 @@ function focusRenderers(toolName: string, onTheme: (theme: Theme) => void): Tool
 function switchable(
 	toolName: string,
 	base: ToolRenderers | undefined,
+	tickers: Tickers,
 	isOn: () => boolean,
 	onTheme: (theme: Theme) => void,
 ): ToolRenderers {
-	const focus = focusRenderers(toolName, onTheme);
+	const focus = focusRenderers(toolName, tickers, onTheme);
 	return {
 		get renderShell() {
 			return isOn() ? focus.renderShell : base?.renderShell;
@@ -232,7 +279,9 @@ export default function focusMode(pi: ExtensionAPI): void {
 		swirlTimer = undefined;
 	}
 
-	pi.registerToolRenderer((toolName, next) => switchable(toolName, next(), () => on, () => {}));
+	const tickers = new Tickers();
+	pi.registerToolRenderer((toolName, next) => switchable(toolName, next(), tickers, () => on, () => {}));
+	pi.on("tool_execution_end", (event) => tickers.stop(event.toolCallId));
 
 	/** Set the flag, capture the ui object, update the footer, and rebuild tool components. */
 	function enable(ctx: ExtensionContext, value: boolean): void {
@@ -251,7 +300,10 @@ export default function focusMode(pi: ExtensionAPI): void {
 	// Focus is on by default whenever a session is joined, so the strips show before the first turn.
 	pi.on("session_start", (_event, ctx) => enable(ctx, true));
 	// Fires on reload and session replacement; without it the old instance's timer keeps writing frames.
-	pi.on("session_shutdown", () => stopSwirl());
+	pi.on("session_shutdown", () => {
+		stopSwirl();
+		tickers.stopAll();
+	});
 
 	function toggle(ctx: ExtensionContext): void {
 		enable(ctx, !on);
