@@ -1,6 +1,6 @@
 {
   "name": "llm-garden",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Jacob Bumgarner's agent skills and pi extensions: orchestrate and commit-flow skills, plus ask, subagent, rename, session-title, stash, focus-mode, footer, and final-marker extensions.",
   "author": "Jacob Bumgarner",
   "repository": {
