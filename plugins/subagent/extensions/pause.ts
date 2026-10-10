@@ -1,12 +1,12 @@
 /**
- * Pause handling for subagent runs: detect a run that ended on a blocked `ask`
- * and render the paused state for the orchestrator. Pure functions over the
- * child's message list; the `ask` extension's `pause.ts` owns the protocol text.
+ * Pause handling for subagent runs: read a child's final output and detect a
+ * run that ended on a blocked `ask`. Pure functions over the child's message
+ * list. The `ask` extension's `pause.ts` owns the protocol text.
  */
 
 import type { Message } from "@earendil-works/pi-ai";
 import { normalize } from "../../ask/extensions/call.ts";
-import { formatQuestionsForOrchestrator, isPauseText } from "../../ask/extensions/pause.ts";
+import { isPauseText } from "../../ask/extensions/pause.ts";
 import type { AskQuestion } from "../../ask/extensions/types.ts";
 
 /** The text of the last assistant message, or "" when there is none. */
@@ -49,27 +49,4 @@ export function detectPause(messages: Message[]): AskQuestion[] | undefined {
 		return [];
 	}
 	return undefined;
-}
-
-export interface PausedRun {
-	agent: string;
-	sessionId: string;
-	questions: AskQuestion[];
-	/** The subagent's last text before it paused, if any. */
-	lastOutput: string;
-}
-
-/** The block an orchestrator reads when a run pauses: status, resume id, the questions, and how to resume. */
-export function formatPaused(run: PausedRun): string {
-	const lines = ["status: paused", `resume_id: ${run.sessionId}`, `agent: ${run.agent}`];
-	const progress = run.lastOutput.trim();
-	if (progress) lines.push(`last_output: ${progress.split("\n").join("\n  ")}`);
-	lines.push(formatQuestionsForOrchestrator(run.questions));
-	const example = run.questions.length > 0 ? `"${run.questions[0].id}": "<option label or free text>"` : "";
-	lines.push(
-		"",
-		`Answer with subagent({ resume: "${run.sessionId}", answers: { ${example} } }).`,
-		"If you lack the context to answer, use `ask` yourself before resuming. Do not guess on the subagent's behalf.",
-	);
-	return lines.join("\n");
 }

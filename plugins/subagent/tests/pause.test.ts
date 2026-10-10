@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
 import { PAUSE_NOTICE } from "../../ask/extensions/pause.ts";
-import { detectPause, formatPaused, getFinalOutput } from "../extensions/pause.ts";
+import { formatPaused } from "../extensions/format.ts";
+import { detectPause, getFinalOutput } from "../extensions/pause.ts";
 
 const assistant = (parts: Message["content"] extends infer _ ? unknown[] : never) =>
 	({ role: "assistant", content: parts, stopReason: "toolUse" }) as unknown as Message;
@@ -60,6 +61,6 @@ test("formatPaused renders status, resume id, last output, questions, and the re
 	assert.equal(lines[3], "last_output: Found the server.");
 	assert.equal(lines[4], "  Two options.");
 	assert.equal(lines[5], "questions:");
-	assert.ok(text.includes('Answer with subagent({ resume: "sub-abc12345", answers: { "access": "<option label or free text>" } }).'));
+	assert.ok(text.includes('Answer with subagent({ action: "resume", id: "sub-abc12345", answers: { "access": "<option label or free text>" } }).'));
 	assert.ok(text.endsWith("Do not guess on the subagent's behalf."));
 });

@@ -1,7 +1,7 @@
 ---
 name: opus-4-8
-description: General-purpose worker running on anthropic/claude-opus-4-8
-model: anthropic/claude-opus-4-8
+description: General-purpose worker running on lilly-code/claude-opus-4.8[1m]
+model: lilly-code/claude-opus-4.8[1m]
 ---
 
 You are a general-purpose coding agent running in an isolated context window to handle a delegated task. Work autonomously and use all available tools as needed.
