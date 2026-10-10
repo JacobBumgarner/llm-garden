@@ -1,0 +1,67 @@
+{
+  "$schema": "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json",
+  "computerUse": {
+    "enabled": false
+  },
+  "schemaVersion": 1,
+  "shortcuts": {
+    "bindings": {
+      "nextSidebarTab": {
+        "first": {
+          "command": true,
+          "control": false,
+          "key": "]",
+          "keyCode": 30,
+          "option": false,
+          "shift": true
+        }
+      },
+      "nextSurface": {
+        "first": {
+          "command": true,
+          "control": true,
+          "key": "]",
+          "keyCode": 30,
+          "option": false,
+          "shift": false
+        }
+      },
+      "prevSidebarTab": {
+        "first": {
+          "command": true,
+          "control": false,
+          "key": "[",
+          "keyCode": 33,
+          "option": false,
+          "shift": true
+        }
+      },
+      "prevSurface": {
+        "first": {
+          "command": true,
+          "control": true,
+          "key": "[",
+          "keyCode": 33,
+          "option": false,
+          "shift": false
+        }
+      },
+      "focusLeft": "cmd+opt+[",
+      "focusRight": "cmd+opt+]"
+    }
+  },
+  "sidebar": {
+    "fontSize": 14,
+    "showAgentActivity": true
+  },
+  "sidebarAppearance": {
+    "tintColor": "#3E5B9A",
+    "tintOpacity": 0.28
+  },
+  "surfaceTabBar": {
+    "fontSize": 14
+  },
+  "workspaceColors": {
+    "selectionColor": "#2C2C2E"
+  }
+}

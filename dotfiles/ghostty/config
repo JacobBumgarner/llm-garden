@@ -1,0 +1,3 @@
+keybind = shift+enter=text:\x1b\r
+font-size = 20
+theme = dark:Argonaut, light:Firewatch
