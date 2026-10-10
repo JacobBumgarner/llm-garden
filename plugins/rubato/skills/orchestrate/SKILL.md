@@ -62,10 +62,16 @@ every Outcome. Delegates do recon, critique, implementation, cleanup, and the
 final review. Each delegate is a fresh session that cannot read this skill, so
 the brief says in plain words what the job is, what to read, where to write, and
 what to return. There are no named agents or personas. The brief is the role.
+Give each delegate a short label naming the job when the host tool takes one.
 
 Delegates write to their own section of the plan file below the fold or to
 `plan/scratch/{plan-name}/`, and return a summary. They never commit and never
 write an Outcome. Independent delegates run concurrently, sent in one message.
+
+When the host's delegation tool supports background runs, send independent
+delegates as background starts in one message and collect them with a single
+wait. A delegate that pauses with questions is answered through the host tool's
+resume.
 
 ### Models
 
