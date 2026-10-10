@@ -25,7 +25,8 @@
     "typebox": "*"
   },
   "scripts": {
-    "test": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.test.ts'"
+    "test": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.test.ts'",
+    "test:live": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.live.ts'"
   },
   "type": "module"
 }
