@@ -61,9 +61,9 @@ export function visibleWidth(text: string): number {
 	return [...text].length;
 }
 
-export function truncateToWidth(text: string, width: number, ellipsis = "..."): string {
+export function truncateToWidth(text: string, width: number, ellipsis = "...", pad = false): string {
 	const chars = [...text];
-	if (chars.length <= width) return text;
+	if (chars.length <= width) return pad ? text + " ".repeat(width - chars.length) : text;
 	const keep = Math.max(0, width - [...ellipsis].length);
 	return chars.slice(0, keep).join("") + ellipsis;
 }
