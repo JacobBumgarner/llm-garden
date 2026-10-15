@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
-import { DelegateClient, START_DEADLINE_MS, STDERR_TAIL_CHARS, type DelegateChild } from "../extensions/rpc.ts";
+import {
+	childEnv,
+	DelegateClient,
+	START_DEADLINE_MS,
+	STDERR_TAIL_CHARS,
+	type DelegateChild,
+} from "../extensions/rpc.ts";
 
 const STDIN_END = "<end>";
 
@@ -43,13 +49,13 @@ class FakeChild extends EventEmitter {
 
 function setup() {
 	const child = new FakeChild();
-	const spawned: { command: string; args: string[] }[] = [];
+	const spawned: { command: string; args: string[]; env: NodeJS.ProcessEnv }[] = [];
 	const client = new DelegateClient({
 		args: ["--no-session"],
 		cwd: "/tmp",
 		command: "pi-fake",
-		spawn: (command, args) => {
-			spawned.push({ command, args });
+		spawn: (command, args, options) => {
+			spawned.push({ command, args, env: options.env });
 			return child as unknown as DelegateChild;
 		},
 	});
@@ -72,7 +78,19 @@ function collect(client: DelegateClient): any[] {
 
 test("start passes --mode rpc before the caller's args", async () => {
 	const { spawned } = await started();
-	assert.deepEqual(spawned, [{ command: "pi-fake", args: ["--mode", "rpc", "--no-session"] }]);
+	assert.equal(spawned.length, 1);
+	assert.equal(spawned[0].command, "pi-fake");
+	assert.deepEqual(spawned[0].args, ["--mode", "rpc", "--no-session"]);
+});
+
+test("start spawns the child with cmux pi hooks disabled so it does not report to the parent's sidebar entry", async () => {
+	const { spawned } = await started();
+	assert.equal(spawned[0].env.CMUX_PI_HOOKS_DISABLED, "1");
+});
+
+test("childEnv keeps the base environment and only adds the hook switch", () => {
+	const env = childEnv({ PATH: "/bin", CMUX_SURFACE_ID: "surface-1" });
+	assert.deepEqual(env, { PATH: "/bin", CMUX_SURFACE_ID: "surface-1", CMUX_PI_HOOKS_DISABLED: "1" });
 });
 
 test("start sends get_state and resolves on its response", async () => {

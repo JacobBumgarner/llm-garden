@@ -24,10 +24,13 @@
  * `session_shutdown`, which stops every live delegate. A result courier posts
  * each background result that no `wait` collected as a `subagent-result`
  * message, which wakes an idle orchestrator unless the run was started with
- * `notify: "quiet"`. A live view publishes the queued, running, and paused
+ * `notify: "quiet"`. Inside a cmux workspace, a progress reporter mirrors the
+ * live runs onto the workspace progress bar (`done/total agents`) and clears
+ * it when none is left. A live view publishes the queued, running, and paused
  * runs on `pi.events` as `subagent:live`, `/subagents` opens a bordered
  * overlay that lists running runs above finished ones with keys to stop,
- * steer, or answer the selected one, and `alt+a` opens that overlay.
+ * steer, or answer the selected one, or open the focus-mode actions panel
+ * over its tool calls, and `alt+a` opens that overlay.
  * `/subagents stop`, the overlay `s` key, and a double Esc stop every running
  * run after a confirm. Each call line names the action, agent, and label, and
  * a foreground call streams turns, tokens, and the last tool call under it. Sessions persist under `PI_SUBAGENT_SESSION_DIR` (default
@@ -47,8 +50,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import { type AgentConfig, type AgentScope, describeAgents, discoverAgents } from "./agents.ts";
 import { type BlockedCalls, createBlockedCalls, type DetachReason, shouldDetachOnInput } from "./blocked.ts";
+import { createCmuxProgress } from "./cmux.ts";
 import { createCourier, RESULT_MESSAGE_TYPE, stripNoticeHeader, type ResultMessageDetails } from "./courier.ts";
 import {
 	aggregateUsage,
@@ -115,9 +119,14 @@ interface Call {
 const LABEL_DESCRIPTION =
 	"Short title for this run, 3 to 7 words, shown in the transcript and used as the delegate's session name. Required with agent and task.";
 
+/** User-scope agents known when the extension loaded; project-local agents are discovered per call. */
+const USER_AGENTS = describeAgents(discoverAgents(process.cwd(), "user").agents);
+
+const AGENT_DESCRIPTION = `Name of the agent to invoke. Available: ${USER_AGENTS}`;
+
 const TaskItem = Type.Object({
 	label: Type.String({ description: "Short title for this task, 3 to 7 words" }),
-	agent: Type.String({ description: "Name of the agent to invoke" }),
+	agent: Type.String({ description: AGENT_DESCRIPTION }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
@@ -127,7 +136,7 @@ const SubagentParams = Type.Object({
 	action: StringEnum(["start", "status", "wait", "send", "stop", "resume"] as const, {
 		description: "What to do. Each action accepts only its own fields.",
 	}),
-	agent: Type.Optional(Type.String({ description: "start: name of the agent to invoke" })),
+	agent: Type.Optional(Type.String({ description: `start: ${AGENT_DESCRIPTION}` })),
 	task: Type.Optional(Type.String({ description: "start: the task. resume: follow-up work for a finished run." })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "start: several {label, agent, task} at once, instead of label, agent, and task" })),
 	background: Type.Optional(
@@ -244,8 +253,7 @@ function resolveTasks(request: RequestOf<"start">, agents: AgentConfig[]): Resol
 		else unknown.push(`"${task.agent}"`);
 	}
 	if (unknown.length === 0) return resolved;
-	const available = agents.map((agent) => `"${agent.name}"`).join(", ") || "none";
-	return errorResult("start", `Unknown agent: ${unknown.join(", ")}. Available agents: ${available}.`);
+	return errorResult("start", `Unknown agent: ${unknown.join(", ")}. Available agents: ${describeAgents(agents)}.`);
 }
 
 /** Ask the user to approve project-local agents. Return true when none need approval or the user agrees. */
@@ -621,6 +629,7 @@ export default function (pi: ExtensionAPI) {
 					}),
 			}),
 			createLiveView(pi, created, () => latestCtx),
+			createCmuxProgress(created),
 		];
 		return created;
 	};
@@ -670,7 +679,7 @@ export default function (pi: ExtensionAPI) {
 			"A subagent that needs a decision pauses: the result reads `status: paused` with its questions and a resume_id.",
 			'Answer from your own context, or ask the user first, then call { action: "resume", id, answers }.',
 			"Sessions are kept 7 days.",
-			`Default agent scope is "user" (the plugin's bundled agents plus ${path.join(getAgentDir(), "agents")}).`,
+			`Default agent scope is "user" (the plugin's bundled agents plus ${path.join(getAgentDir(), "agents")}). Only these agents exist in that scope: ${USER_AGENTS}.`,
 			`To enable project-local agents in ${CONFIG_DIR_NAME}/agents, set agentScope: "both" (or "project").`,
 		].join(" "),
 		parameters: SubagentParams,

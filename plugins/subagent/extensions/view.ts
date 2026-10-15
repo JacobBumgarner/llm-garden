@@ -3,7 +3,10 @@
  * `/subagents` overlay (drawn inside a box border) that lists every run of the
  * session, running runs above finished ones under headers that always draw,
  * scrolling the list to fit the height pi gives the overlay, with keys to
- * stop, steer, or answer the selected one, and the stop-all paths:
+ * stop, steer, or answer the selected one, or open its actions panel (the
+ * focus-mode panel over the run's own tool calls). Like that panel, it pans
+ * sideways with ←/→ (or shift+wheel) to read long labels, `0` pans back,
+ * PgUp/PgDn, Home/End, g/G, and the wheel move the selection. The stop-all paths:
  * `/subagents stop`, the overlay `s` key, and a double Esc, which arrives as
  * the `subagent:stop-all` event. The `alt+a` shortcut and bare `/subagents`
  * toggle the overlay, the `subagent:open` event only opens it, and a click
@@ -14,13 +17,24 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, type OverlayHandle, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	matchesKey,
+	type OverlayHandle,
+	sliceByColumn,
+	truncateToWidth,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { AskQuestion } from "../../ask/extensions/types.ts";
+import { ActionLog } from "../../focus-mode/extensions/log.ts";
+import { ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/extensions/panel.ts";
 import {
 	formatOverlayRow,
 	layoutOverlay,
 	type OverlayEntry,
 	type OverlayPaint,
+	overlayRowWidth,
 	overlayStateColor,
 	windowEntries,
 } from "./format.ts";
@@ -40,7 +54,9 @@ const OVERLAY_HEIGHT_FRACTION = 0.6;
 const BOX_EDGES = 2;
 /** The leading blank, the blank above the help line, and the help line. */
 const FIXED_LINES = 3;
-const HELP_LINE = "↑↓ select · s stop · m message · a answer · esc or alt+a close";
+const HELP_LINE = "↑↓ select · ←→ pan · space actions · s stop · m message · a answer · esc or alt+a close";
+/** Columns one ← or → key (or one shift+wheel tick) pans, matching the actions panel. */
+export const PAN_STEP = 8;
 
 /** The registry surface the live view reads and drives. A `RunRegistry` satisfies it. */
 export interface ViewRegistry {
@@ -138,6 +154,8 @@ export interface RunListDeps {
 	requestRender: () => void;
 	/** Run a dialog with the overlay out of the way, then bring the overlay back with focus. */
 	suspend: <T>(dialog: () => Promise<T>) => Promise<T>;
+	/** Open the actions panel for a run and resolve when it closes. Absent outside the terminal UI. */
+	showActions?: (run: Run) => Promise<void>;
 	now: () => number;
 	/** The terminal height in rows, which the overlay's height cap is a fraction of. */
 	rows: () => number;
@@ -157,14 +175,19 @@ type RunAction = (run: Run) => Promise<void>;
  * under an empty one. Unselected rows paint the icon and state word by state,
  * and the selected row takes the highlight alone. The arrow keys move a
  * selection over runs and skip headers, gaps, and `(none)` lines. Keys act on
- * the selected run: `s` stops it after a confirm, `m` steers it, `a` answers a
- * paused run, esc closes. Runs that do not fit the overlay's height scroll
+ * the selected run: space opens its actions panel, `s` stops it after a
+ * confirm, `m` steers it, `a` answers a paused run, esc closes. Runs that do not fit the overlay's height scroll
  * with the selection, and dim `↑ N more` and `↓ N more` lines count the
- * entries hidden on each side.
+ * entries hidden on each side. PgUp/PgDn move the selection by a page,
+ * Home/End (g/G) to the first and last run, and the wheel by one run a tick.
+ * Rows wider than the overlay pan sideways with ←/→ or shift+wheel, by
+ * `PAN_STEP` columns, up to the widest row's end; `0` pans back. The help
+ * line reports the pan while one is in effect.
  */
 export class RunListView {
 	private selected = 0;
 	private windowStart = 0;
+	private pan = 0;
 	private notice: string | undefined;
 	private busy: Promise<void> | undefined;
 	private readonly deps: RunListDeps;
@@ -224,22 +247,40 @@ export class RunListView {
 		const selectedIndex = entries.findIndex((entry) => entry.kind === "run" && entry.run === selected);
 		const view = windowEntries(entries, selectedIndex, entryCapacity(this.deps.rows(), notice.length), this.windowStart);
 		this.windowStart = view.start;
+		const rowWidth = width - ROW_INDENT;
+		this.pan = Math.min(this.pan, this.maxPan(entries, rowWidth));
 		const rows = view.entries.map((entry) => {
 			if (entry.kind === "gap") return "";
 			if (entry.kind === "header") return this.dimLine(entry.title);
 			if (entry.kind === "none") return this.dimLine("(none)");
-			return `${pad}${this.row(entry.run, entry.run === selected, width - ROW_INDENT)}`;
+			return `${pad}${this.row(entry.run, entry.run === selected, rowWidth)}`;
 		});
 		if (view.above > 0) rows.unshift(this.dimLine(`↑ ${view.above} more`));
 		if (view.below > 0) rows.push(this.dimLine(`↓ ${view.below} more`));
-		return ["", ...rows, ...notice, "", this.deps.dim(HELP_LINE)];
+		const help = this.pan > 0 ? `→ ${this.pan} · ${HELP_LINE}` : HELP_LINE;
+		return ["", ...rows, ...notice, "", this.deps.dim(help)];
 	}
 
+	/** The farthest pan that still shows the end of the widest row inside `width` columns (after the `> ` marker). */
+	private maxPan(entries: OverlayEntry[], width: number): number {
+		const fit = Math.max(width - 2, 1);
+		const now = this.deps.now();
+		let widest = 0;
+		for (const entry of entries) {
+			if (entry.kind === "run") widest = Math.max(widest, overlayRowWidth(entry.run, now));
+		}
+		return Math.max(0, widest - fit);
+	}
+
+	/** Render a row at the panned width and show the `fit` columns from the pan. The `> ` marker stays put. */
 	private row(run: Run, selected: boolean, width: number): string {
 		const fit = Math.max(width - 2, 1);
+		const now = this.deps.now();
+		// A row is formatted to exactly its width, so an unpanned row needs no slicing.
+		const panned = (text: string) => (this.pan > 0 ? sliceByColumn(text, this.pan, fit) : text);
 		// unpainted: theme.fg resets the foreground at its end, which would cut the highlight short
-		if (selected) return this.deps.highlight(`> ${formatOverlayRow(run, this.deps.now(), fit)}`);
-		return `  ${formatOverlayRow(run, this.deps.now(), fit, this.deps.paint)}`;
+		if (selected) return this.deps.highlight(`> ${panned(formatOverlayRow(run, now, fit + this.pan))}`);
+		return `  ${panned(formatOverlayRow(run, now, fit + this.pan, this.deps.paint))}`;
 	}
 
 	handleInput(data: string): void {
@@ -249,15 +290,54 @@ export class RunListView {
 		if (matchesKey(data, "escape") || matchesKey(data, TOGGLE_KEY)) return this.deps.close();
 		if (matchesKey(data, "up")) return this.move(-1);
 		if (matchesKey(data, "down")) return this.move(1);
+		if (matchesKey(data, "pageUp")) return this.moveTo(this.selected - this.pageSize());
+		if (matchesKey(data, "pageDown")) return this.moveTo(this.selected + this.pageSize());
+		if (matchesKey(data, "home") || data === "g") return this.moveTo(0);
+		if (matchesKey(data, "end") || data === "G") return this.moveTo(Number.POSITIVE_INFINITY);
+		if (matchesKey(data, "left")) return this.panBy(-PAN_STEP);
+		if (matchesKey(data, "right")) return this.panBy(PAN_STEP);
+		if (data === "0") return this.panBy(Number.NEGATIVE_INFINITY);
+		if (matchesKey(data, "space")) return this.act(this.actions);
 		if (matchesKey(data, "s")) return this.act(this.stop);
 		if (matchesKey(data, "m")) return this.act(this.message);
 		if (matchesKey(data, "a")) return this.act(this.answer);
 	}
 
+	/** Wheel moves the selection one run a tick; shift+wheel pans, wheel-up panning right so a trackpad swipe tracks the content. */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "wheel") return undefined;
+		if (this.busy) return { handled: true };
+		const delta = Math.sign(event.wheelDelta ?? 0);
+		if (delta === 0) return { handled: true };
+		if (event.shift) this.panBy(-delta * PAN_STEP);
+		else this.moveTo(this.selected + delta);
+		return { handled: true, render: true };
+	}
+
+	/** Wrap the selection by `delta` runs. */
 	private move(delta: number): void {
 		const count = this.runs().length;
 		if (count === 0) return;
 		this.selected = (this.selected + delta + count) % count;
+		this.deps.requestRender();
+	}
+
+	/** Put the selection on run `index`, clamped to the ends without wrapping. */
+	private moveTo(index: number): void {
+		const count = this.runs().length;
+		if (count === 0) return;
+		this.selected = Math.max(0, Math.min(Math.floor(index), count - 1));
+		this.deps.requestRender();
+	}
+
+	/** Runs the selection jumps on PgUp/PgDn: the entry lines the overlay has, at least one. */
+	private pageSize(): number {
+		return Math.max(1, entryCapacity(this.deps.rows(), 0));
+	}
+
+	/** Pan the rows by `delta` columns, never left of the start; the render clamps the far end to the widest row. */
+	private panBy(delta: number): void {
+		this.pan = Math.max(0, this.pan + delta);
 		this.deps.requestRender();
 	}
 
@@ -272,6 +352,12 @@ export class RunListView {
 				this.busy = undefined;
 				this.deps.requestRender();
 			});
+	}
+
+	private async actions(run: Run): Promise<void> {
+		const { showActions, suspend } = this.deps;
+		if (!showActions) return;
+		await suspend(() => showActions(run));
 	}
 
 	private async stop(run: Run): Promise<void> {
@@ -328,6 +414,55 @@ export function createStopAllHandler(
 		if (!(await ctx.ui.confirm("Stop subagents", `Stop ${count} running ${noun}?`))) return;
 		await registry.stopAll();
 	};
+}
+
+/**
+ * Open the focus-mode actions panel over `run`'s tool calls. The panel's log is built from the
+ * run's message history and extended as the registry reports more messages, so a running run
+ * streams. Resolves when the panel closes.
+ */
+async function openActionsPanel(ctx: ExtensionContext, registry: ViewRegistry, run: Run): Promise<void> {
+	const log = new ActionLog();
+	let seen = 0;
+	const sync = () => {
+		const current = registry.list().find((item) => item.id === run.id) ?? run;
+		if (current.messages.length > seen) {
+			log.addMessages(current.messages.slice(seen), isLive(current));
+			seen = current.messages.length;
+		}
+	};
+	sync();
+	await ctx.ui.custom<void>(
+		(tui, theme, _keybindings, done) => {
+			const unsubscribe = registry.on("change", (changed) => {
+				if (changed.id !== run.id) return;
+				sync();
+				tui.requestRender();
+			});
+			const panel = new ActionsPanel({
+				entries: () => log.visible(),
+				groups: () => log.groups(),
+				label: (group) => log.label(group),
+				title: `· ${run.agent} ${run.label}`,
+				rows: () => tui.terminal.rows,
+				requestRender: () => tui.requestRender(),
+				theme,
+				terminal: tui.terminal,
+				done: () => done(),
+			});
+			return {
+				render: (width) => panel.render(width),
+				handleInput: (data) => panel.handleInput(data),
+				handleMouse: (event) => panel.handleMouse(event),
+				invalidate: () => panel.invalidate(),
+				dispose: () => {
+					unsubscribe();
+					panel.dispose();
+				},
+			};
+		},
+		{ overlay: true, overlayOptions: { anchor: "center", width: PANEL_WIDTH, minWidth: PANEL_MIN_WIDTH } },
+	);
 }
 
 /** The open overlay, kept so a second request closes it and a badge click does not stack another. */
@@ -427,6 +562,7 @@ async function openOverlay(pi: Pick<ExtensionAPI, "sendMessage">, registry: View
 							handle?.focus();
 						}
 					},
+					showActions: (run) => openActionsPanel(ctx, registry, run),
 					now: Date.now,
 					rows: () => tui.terminal.rows,
 					highlight: (text) => theme.fg("accent", text),
@@ -444,6 +580,7 @@ async function openOverlay(pi: Pick<ExtensionAPI, "sendMessage">, registry: View
 						return boxLines(created.render(boxInnerWidth(width)), width, OVERLAY_TITLE, (text) => theme.fg("border", text));
 					},
 					handleInput: (data) => created.handleInput(data),
+					handleMouse: (event) => created.handleMouse(event),
 					invalidate: () => {},
 					dispose: () => {
 						clearInterval(refresh);

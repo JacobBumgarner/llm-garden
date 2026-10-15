@@ -376,14 +376,27 @@ export function overlayStateColor(state: Run["state"]): OverlayColor {
  * no state word, so only its icon is painted.
  */
 export function formatOverlayRow(run: Run, now: number, width: number, paint?: OverlayPaint): string {
-	const age = `${formatAge(now - run.lastActivity)} ago`;
-	const head = `${OVERLAY_ICONS[run.state]} ${run.agent} ${run.id}  ${run.label}  `;
+	const age = overlayAge(run, now);
+	const head = overlayHead(run);
 	const fitted = [...cutText(`${head}${overlayDetail(run)}`, Math.max(0, width - age.length - 1))];
 	const gap = Math.max(1, width - fitted.length - age.length);
 	const word = { start: [...head].length, length: stateWord(run).length };
 	const colored = paint ? paintSegments(run.state, fitted, word, paint) : fitted.join("");
 	const rest = [...`${" ".repeat(gap)}${age}`].slice(0, Math.max(width - fitted.length, 0)).join("");
 	return `${colored}${rest}`;
+}
+
+function overlayAge(run: Run, now: number): string {
+	return `${formatAge(now - run.lastActivity)} ago`;
+}
+
+function overlayHead(run: Run): string {
+	return `${OVERLAY_ICONS[run.state]} ${run.agent} ${run.id}  ${run.label}  `;
+}
+
+/** Return the width at which `formatOverlayRow` shows the whole row with one space before the age: the width a pan can reveal. */
+export function overlayRowWidth(run: Run, now: number): number {
+	return [...`${overlayHead(run)}${overlayDetail(run)}`].length + 1 + overlayAge(run, now).length;
 }
 
 /** Join the fitted row characters, painting the first one and the `word` span, cut to what fits. */

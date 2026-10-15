@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatOverlayRow, listNewestFirst } from "../extensions/format.ts";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { formatOverlayRow, listNewestFirst, overlayRowWidth } from "../extensions/format.ts";
 import type { Run } from "../extensions/types.ts";
 import {
 	boxLines,
@@ -285,7 +286,14 @@ function setupView() {
 			],
 		}),
 	];
-	const log = { confirms: [] as string[], inputs: [] as [string, string | undefined][], notes: [] as string[], posts: [] as string[], suspends: 0 };
+	const log = {
+		confirms: [] as string[],
+		inputs: [] as [string, string | undefined][],
+		notes: [] as string[],
+		posts: [] as string[],
+		suspends: 0,
+		actions: [] as string[],
+	};
 	const script = { confirm: true, inputs: [] as (string | undefined)[] };
 	let closed = 0;
 	let renders = 0;
@@ -309,6 +317,9 @@ function setupView() {
 		suspend: async (dialog) => {
 			log.suspends++;
 			return dialog();
+		},
+		showActions: async (run) => {
+			log.actions.push(run.id);
 		},
 		now: () => NOW,
 		rows: () => termRows,
@@ -346,7 +357,7 @@ test("rows list runs newest first with the selection marked and the key line las
 	assert.equal(lines[2], `  [> ${formatOverlayRow(makeRun({ id: "new", startedAt: NOW - 1_000 }), NOW, 56)}]`);
 	assert.match(lines[3], /^ {4}\{paused:⏸\} glm ask {2}Check ask {2}\{paused:paused\}: 2 questions/);
 	assert.match(lines[4], /^ {4}\{running:▶\} glm old /);
-	assert.equal(lines.at(-1), "↑↓ select · s stop · m message · a answer · esc or alt+a close");
+	assert.equal(lines.at(-1), "↑↓ select · ←→ pan · space actions · s stop · m message · a answer · esc or alt+a close");
 });
 
 test("up and down move the selection and wrap", async () => {
@@ -393,6 +404,13 @@ test("a notice draws indented above the key line and clears on the next key", as
 	assert.equal(lines.at(-2), "");
 	await press("down");
 	assert.ok(!view.render(60).includes("sub-x is done, so it cannot be steered"));
+});
+
+test("space opens the actions panel for the selected run with the list suspended", async () => {
+	const { log, press } = setupView();
+	await press("space");
+	assert.deepEqual(log.actions, ["new"]);
+	assert.equal(log.suspends, 1);
 });
 
 test("s stops the selected run only after the confirm says yes", async () => {
@@ -597,4 +615,93 @@ test("the selection stays visible when down passes the window", async () => {
 		assert.ok(lines.length <= 13);
 	}
 	assert.match(view.render(60).join("\n"), /↑ \d+ more[\s\S]*↓ \d+ more/);
+});
+
+test("page, home, and end keys move the selection by a page and to the ends without wrapping", async () => {
+	const { registry, view, press, setRows } = setupView();
+	registry.runs = Array.from({ length: 12 }, (_, index) => makeRun({ id: `r${index}`, startedAt: NOW - index * 1_000 }));
+	setRows(25);
+	const selectedId = () => /\[> ▶ glm (r\d+)/.exec(view.render(60).join("\n"))?.[1];
+	assert.equal(selectedId(), "r0");
+	await press("pageDown");
+	assert.equal(selectedId(), `r${entryCapacity(25, 0)}`);
+	await press("end");
+	assert.equal(selectedId(), "r11");
+	await press("pageDown");
+	assert.equal(selectedId(), "r11", "end does not wrap");
+	await press("pageUp");
+	assert.equal(selectedId(), `r${11 - entryCapacity(25, 0)}`);
+	await press("home");
+	assert.equal(selectedId(), "r0");
+	await press("pageUp");
+	assert.equal(selectedId(), "r0", "home does not wrap");
+	await press("G");
+	assert.equal(selectedId(), "r11");
+	await press("g");
+	assert.equal(selectedId(), "r0");
+});
+
+test("left and right pan the rows up to the widest row's end, 0 pans back, and the key line reports the pan", async () => {
+	const { registry, view, press } = setupView();
+	const label = "A label long enough to run well past the overlay's width";
+	registry.runs = [makeRun({ id: "wide", label })];
+	const full = overlayRowWidth(registry.runs[0], NOW);
+	const fit = 56;
+	assert.ok(full > fit, "the fixture row overflows the overlay");
+	const row = () => view.render(60)[2];
+	assert.match(row(), /^ {2}\[> ▶ glm wide {2}A label/);
+	assert.match(row(), /…/, "the unpanned row cuts the label");
+
+	await press("right");
+	assert.match(row(), /^ {2}\[> /, "the marker stays put");
+	assert.ok(!row().includes("▶ glm wide"), "the row start scrolled off");
+	assert.equal(row().length, 2 + "[> ".length + fit + "]".length, "the row keeps its width");
+	assert.match(view.render(60).at(-1) ?? "", /^→ 8 · ↑↓ select/);
+
+	for (let step = 0; step < 20; step++) await press("right");
+	assert.match(view.render(60).at(-1) ?? "", new RegExp(`^→ ${full - fit} · `), "the pan clamps to the widest row");
+	assert.match(row(), /ago\]$/, "the far end shows the whole age");
+	assert.ok(!row().includes("…"), "nothing is cut at the far end");
+
+	await press("left");
+	assert.match(view.render(60).at(-1) ?? "", new RegExp(`^→ ${full - fit - 8} · `));
+	await press("0");
+	assert.match(row(), /^ {2}\[> ▶ glm wide/);
+	assert.match(view.render(60).at(-1) ?? "", /^↑↓ select/);
+	await press("left");
+	assert.match(view.render(60).at(-1) ?? "", /^↑↓ select/, "left at the start stays put");
+});
+
+test("the wheel moves the selection a run a tick and shift+wheel pans", () => {
+	const { registry, view } = setupView();
+	registry.runs = [
+		makeRun({ id: "r0", startedAt: NOW - 1_000, label: "A label long enough to run well past the overlay's width" }),
+		makeRun({ id: "r1", startedAt: NOW - 2_000 }),
+	];
+	const wheel = (delta: number, shift = false) =>
+		view.handleMouse({
+			type: "wheel",
+			button: "none",
+			x: 0,
+			y: 0,
+			screenX: 0,
+			screenY: 0,
+			width: 60,
+			height: 10,
+			shift,
+			alt: false,
+			ctrl: false,
+			wheelDelta: delta,
+		});
+	assert.deepEqual(wheel(1), { handled: true, render: true });
+	assert.match(view.render(60)[3], /^ {2}\[> ▶ glm r1/);
+	wheel(1);
+	assert.match(view.render(60)[3], /^ {2}\[> ▶ glm r1/, "the wheel does not wrap");
+	wheel(-1);
+	assert.match(view.render(60)[2], /^ {2}\[> ▶ glm r0/);
+	wheel(-1, true);
+	assert.match(view.render(60).at(-1) ?? "", /^→ 8 · /, "wheel-up with shift pans right");
+	wheel(1, true);
+	assert.match(view.render(60).at(-1) ?? "", /^↑↓ select/);
+	assert.equal(view.handleMouse({ ...({} as TuiMouseEvent), type: "click", button: "left" }), undefined);
 });

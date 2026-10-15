@@ -37,7 +37,25 @@ export interface DelegateChild {
 	on(event: "error", fn: (err: Error) => void): unknown;
 }
 
-export type DelegateSpawn = (command: string, args: string[], options: { cwd: string }) => DelegateChild;
+export type DelegateSpawn = (
+	command: string,
+	args: string[],
+	options: { cwd: string; env: NodeJS.ProcessEnv },
+) => DelegateChild;
+
+/**
+ * The child's environment: the orchestrator's, with cmux's pi hooks turned off.
+ *
+ * A child inherits `CMUX_SURFACE_ID`, so the cmux-generated pi extension it loads would report
+ * the child's session start, every tool call, and its stop to the orchestrator's sidebar
+ * entry. That flips the entry back to "running" after the orchestrator reports done and
+ * clears its "needs input" state while a question is open. The parent reports the child
+ * instead: SubagentStart/SubagentStop feed events from the `subagent` tool call, and the
+ * workspace progress bar from cmux.ts while any run is live.
+ */
+export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	return { ...base, CMUX_PI_HOOKS_DISABLED: "1" };
+}
 
 export interface DelegateClientOptions {
 	/** Flags for the child. The client prepends `--mode rpc`. */
@@ -55,7 +73,11 @@ interface Pending {
 }
 
 const defaultSpawn: DelegateSpawn = (command, args, options) =>
-	nodeSpawn(command, args, { cwd: options.cwd, stdio: ["pipe", "pipe", "pipe"] }) as unknown as DelegateChild;
+	nodeSpawn(command, args, {
+		cwd: options.cwd,
+		env: options.env,
+		stdio: ["pipe", "pipe", "pipe"],
+	}) as unknown as DelegateChild;
 
 /** Drive one `pi --mode rpc` child through typed commands and session events. */
 export class DelegateClient {
@@ -88,7 +110,7 @@ export class DelegateClient {
 	async start(): Promise<void> {
 		if (this.child) throw new Error("Delegate client already started");
 		const { command, args } = this.invocation();
-		const child = (this.options.spawn ?? defaultSpawn)(command, args, { cwd: this.options.cwd });
+		const child = (this.options.spawn ?? defaultSpawn)(command, args, { cwd: this.options.cwd, env: childEnv() });
 		this.child = child;
 		this.attach(child);
 		await this.awaitReady(child);
