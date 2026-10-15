@@ -10,6 +10,10 @@
  * - turn ends: the snake unwinds back to the resting pair, holds briefly, then
  *   refills in dim to eight dots
  *
+ * The elapsed clock counts from the session's first entry, or from the most
+ * recent /timer-reset, which persists as a custom session entry so it survives
+ * resume. Shown as `12m`, `3h05m`, then `2d03h` once it passes a day.
+ *
  * Replaces pi's default footer and hides the built-in "Working" row on session
  * start, since the glyph covers that role. Toggle back with /footer.
  */
@@ -103,11 +107,24 @@ function abbrev(n: number): string {
 function elapsed(ms: number): string {
 	const m = Math.floor(ms / 60_000);
 	if (m < 60) return `${m}m`;
-	return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+	const h = Math.floor(m / 60);
+	if (h < 24) return `${h}h${String(m % 60).padStart(2, "0")}m`;
+	return `${Math.floor(h / 24)}d${String(h % 24).padStart(2, "0")}h`;
 }
 
+const TIMER_RESET = "footer-timer-reset";
+
+/** Start of the elapsed clock: the latest timer reset on this branch, else the first entry. */
 function sessionStart(ctx: ExtensionContext): number {
-	const first = ctx.sessionManager.getBranch()[0];
+	const branch = ctx.sessionManager.getBranch();
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const e = branch[i];
+		if (e.type === "custom" && e.customType === TIMER_RESET) {
+			const at = (e.data as { at?: number } | undefined)?.at;
+			if (typeof at === "number") return at;
+		}
+	}
+	const first = branch[0];
 	const t = first ? Date.parse(first.timestamp) : NaN;
 	return Number.isNaN(t) ? Date.now() : t;
 }
@@ -294,13 +311,20 @@ class ActivityGlyph {
 // ---------------------------------------------------------------------------
 // Footer
 
+// Set by the active footer so /timer-reset can restart its clock without a rebuild.
+let resetTimer: ((at: number) => void) | undefined;
+
 function install(pi: ExtensionAPI, ctx: ExtensionContext) {
 	ctx.ui.setWorkingVisible(false);
 	ctx.ui.setFooter((tui, theme, footerData) => {
 		const render = () => tui.requestRender();
 		const sep = theme.fg("dim", " · ");
-		const startedAt = sessionStart(ctx);
+		let startedAt = sessionStart(ctx);
 		const glyph = new ActivityGlyph(render);
+		resetTimer = (at) => {
+			startedAt = at;
+			render();
+		};
 
 		const isAssistant = (e: { message: { role: string } }) => e.message.role === "assistant";
 		const unsubs = [
@@ -318,6 +342,7 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext) {
 
 		return {
 			dispose() {
+				resetTimer = undefined;
 				for (const unsub of unsubs) unsub();
 				glyph.dispose();
 				clearInterval(clock);
@@ -360,6 +385,16 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		if (enabled) install(pi, ctx);
+	});
+
+	pi.registerCommand("timer-reset", {
+		description: "Restart the footer's elapsed clock from now",
+		handler: async (_args, ctx) => {
+			const at = Date.now();
+			pi.appendEntry(TIMER_RESET, { at });
+			resetTimer?.(at);
+			ctx.ui.notify("Footer timer reset", "info");
+		},
 	});
 
 	pi.registerCommand("footer", {
