@@ -1,51 +1,27 @@
 {
   "$schema": "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json",
   "computerUse": {
-    "enabled": false
+    "enabled": false,
+    "showInMenuBar": false
   },
   "schemaVersion": 1,
+  "actions": {
+    "group.remove": {
+      "type": "command",
+      "title": "Remove Workspace from Group",
+      "subtitle": "Move the current workspace out of its group to the top level",
+      "keywords": ["ungroup", "group"],
+      "command": "cmux workspace-group remove --workspace \"$CMUX_WORKSPACE_ID\"; exit",
+      "target": "newTabInCurrentPane",
+      "shortcut": "cmd+shift+j"
+    }
+  },
   "shortcuts": {
     "bindings": {
-      "nextSidebarTab": {
-        "first": {
-          "command": true,
-          "control": false,
-          "key": "]",
-          "keyCode": 30,
-          "option": false,
-          "shift": true
-        }
-      },
-      "nextSurface": {
-        "first": {
-          "command": true,
-          "control": true,
-          "key": "]",
-          "keyCode": 30,
-          "option": false,
-          "shift": false
-        }
-      },
-      "prevSidebarTab": {
-        "first": {
-          "command": true,
-          "control": false,
-          "key": "[",
-          "keyCode": 33,
-          "option": false,
-          "shift": true
-        }
-      },
-      "prevSurface": {
-        "first": {
-          "command": true,
-          "control": true,
-          "key": "[",
-          "keyCode": 33,
-          "option": false,
-          "shift": false
-        }
-      },
+      "nextSidebarTab": "cmd+shift+]",
+      "nextSurface": "cmd+ctrl+]",
+      "prevSidebarTab": "cmd+shift+[",
+      "prevSurface": "cmd+ctrl+[",
       "focusLeft": "cmd+opt+[",
       "focusRight": "cmd+opt+]"
     }

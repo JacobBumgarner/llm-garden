@@ -52,6 +52,8 @@ Update with `pi update --extensions`.
 | --- | --- |
 | `dotfiles/ghostty/config` | `~/.config/ghostty/config` |
 | `dotfiles/cmux/cmux.json` | `~/.config/cmux/cmux.json` |
+| `dotfiles/cmux/sidebars/agents.js` | `~/.config/cmux/sidebars/agents.js` |
+| `dotfiles/pi/extensions/cmux-needs-input.ts` | `~/.pi/agent/extensions/cmux-needs-input.ts` |
 
 Symlink them into place with `dotfiles/link.sh`.
 

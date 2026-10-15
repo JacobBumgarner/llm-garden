@@ -18,3 +18,5 @@ link() {
 
 link "$DIR/ghostty/config" "$HOME/.config/ghostty/config"
 link "$DIR/cmux/cmux.json" "$HOME/.config/cmux/cmux.json"
+link "$DIR/cmux/sidebars/agents.js" "$HOME/.config/cmux/sidebars/agents.js"
+link "$DIR/pi/extensions/cmux-needs-input.ts" "$HOME/.pi/agent/extensions/cmux-needs-input.ts"
