@@ -1,417 +1,483 @@
 ---
 name: orchestrate
-description: Run a phased software development workflow in which the user sets direction and reviews at fixed checkpoints while the orchestrator designs and builds. Deep Q&A, a design the agents grill before the user sees it, staged build with cleanup, and a review of what was built against what was approved. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Invoke with the argument `implement` after compaction to build the approved plan.
+description: Run a phased software development workflow in which the user sets direction in short sessions while the orchestrator and its delegates design, build, and verify in the background. Q&A in cycles with recon and a critic, a plan grilled before the user sees it, a design review held as a conversation, a staged build where each stage is one commit, and a demo that hands off to the commit-flow skill. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Invoke with the argument `implement` after compaction to build the approved plan.
 ---
 
 # Orchestrate
 
-Agents write code fast. Left alone, the person who asked for it loses the
-theory behind it. Vibe-coded drafts stick around because nothing forced a
-second look, and plan and code quietly diverge.
+Agents write code fast. Left alone, the person who asked for it loses the theory
+behind it, and plan and code quietly diverge. This skill keeps the user in
+possession of that theory, with one plan file as the record. The bar is the
+whiteboard: when the work is merged, the user can say why this approach over the
+alternatives, where it fails, and what each piece owns, without having read the
+code.
 
-This skill keeps the requester in possession of that theory. It is a workflow
-from request to merged code, with one plan file as the record. A request,
-however open-ended, is questioned until its success criteria are concrete. A
-design is grilled by an agent with no stake in it before the user reads a word.
-A stage of the build is settled only when its check passes. Plan and code sit
-side by side in one file, so the record says where reality left the plan.
+You are the orchestrator. The user gives direction and does not write code. You
+run the questions, write the plan, send the work to delegates, and keep the
+record. You never do by hand what a delegate could do.
 
-You are the orchestrator. The user gives direction and reviews at three
-checkpoints. You run the questions, write the design and the plan, send the
-heavy work to delegates, and keep the record. Everything you show the user is
-at the altitude they think at, components and decisions, not lines. The bar is
-the whiteboard: when the work is merged, the user can defend it without having
-read the code. Why this approach over the alternatives, where it fails, what
-each piece owns.
+## Phases
 
-## Workflow
+There are six phases in the orchestration flow. The plan file's `step:` line
+tracks them.
 
-Eight steps, three checkpoints. A checkpoint is a hard stop for user approval.
+1. **Request.** Session.
+2. **Q&A.** Session and background in cycles. Checkpoint 1.
+3. **Plan.** Background.
+4. **Design review.** Session, then the fresh-reader check in background.
+   Ends at approval, then compaction.
+5. **Build.** Background.
+6. **Demo.** Background, then session. Hands off to `commit-flow`.
 
-1. **Request.** The user describes what they want.
-2. **Q&A.** Deep dialogue until the requirements are clear, with recon in the
-   background. Checkpoint 1: just do it, or run the workflow.
-3. **Whiteboard.** The orchestrator proposes a design.
-4. **Grilling.** A critic asks the questions a skeptical lead would ask. The
-   orchestrator answers or changes the design.
-5. **Design review.** Checkpoint 2: the user reads the page, follows up,
-   approves.
-6. **Staging.** The design becomes ordered stages, with sub-plans where a stage
-   is too big. A critic checks the split and the planned structure. Checkpoint
-   3: the user approves, then compacts.
-7. **Build.** Per stage: an implementer builds, a cleanup reviewer edits the
-   result into shape, the orchestrator records the outcome.
-8. **Hand-off.** Reviewers read the whole change against the plan. The user
-   sends it to the `commit-flow` skill or names what becomes further stages.
+The skill is invoked without any arguments. The skill starts at Request, or
+resumes a plan in `plan/` whose `step:` line matches the request. Invoked with
+`implement`, it resumes at Build. A plan in `plan/archive/` is never resumed.
 
-A **stage** is one buildable unit of the plan. That is the only meaning of
-"stage" here. A **component** is defined in The plan file.
+## Plan file
 
-## Principles
+`plan/{plan-name}.md`, with spokes beside their hub as
+`plan/{hub-name}-{nn}-{spoke}.md` and scratch at `plan/scratch/{plan-name}/`.
+The plan name is the filename without `.md`, everywhere it appears. `ls plan/`
+is the index of all work in flight. Above the fold is the user's
+material and the implementers' Details. Below it is the delegates' record. The
+`----` sits after the last stage. A merged plan moves to
+`plan/archive/unreleased/`. At release, that folder is renamed to
+`plan/archive/v{version}/` by the release step, so plans ship with the
+version they belong to.
 
-### Work
+````
+# {plan-name}
+step: N name  |  merged
+base: the commit the branch left from
 
-Methodical and calm. Reject hacky or shortcut proposals. Never estimate in time.
-Size by impact surface: files touched, modules affected, new tests. The code
-will be read by humans and other agents, so it holds to the bar in Build.
+## Problem
+agent drafts, user rewrites in their own words
 
-### Delegation
+## Design
 
-The orchestrator does the Q&A, writes the design, writes the stages, and writes
-every Outcome. Delegates do recon, critique, implementation, cleanup, and the
-final review. Each delegate is a fresh session that cannot read this skill, so
-the brief says in plain words what the job is, what to read, where to write, and
-what to return. There are no named agents or personas. The brief is the role.
-Give each delegate a short label naming the job when the host tool takes one.
+### Overview
+plain language, distilled from Details, rewritten at Demo from the code
 
-Delegates write to their own section of the plan file below the fold or to
-`plan/scratch/{plan-name}/`, and return a summary. They never commit and never
-write an Outcome. Independent delegates run concurrently, sent in one message.
+### Decisions
+- Chose X over Y because Z. Fails when W.
 
-When the host's delegation tool supports background runs, send independent
-delegates as background starts in one message and collect them with a single
-wait. A delegate that pauses with questions is answered through the host tool's
-resume.
+### Success criteria
+- what is true when it works
+  See it: the command and what appears, or the script under
+  `scripts/verify/` and what it prints
 
-### Models
+### Details
+technical, for implementers: how, why this shape, where it fails,
+interfaces and schemas, invariants, files per stage
 
-Delegates run through whatever subagent or task-delegation tool the host
-provides. Use the cheapest capable model the host offers for all recon and for a
-stage whose Planned is mechanical. A review runs on a different model class
-than the work it reviews, so a mid-tier build gets a top-tier reviewer and a
-cheap build gets a mid- or top-tier one. When the delegation tool accepts a
-model or agent selector, set it per the above; otherwise the delegate inherits
-the session model.
+## Stages
+- Stage 1: title. verify phrase
+- Stage 2: title. verify phrase  (independent of 1)
 
-### Prose
+### Stage 1: title
+- Planned: one or two sentences
+- Verify: the named check
+- Files: path, path
+- Outcome: pending
 
-These rules cover every line written for the user, including the plan file and
-briefs. Pass them into any brief whose output the user will read.
+### Stage 2: title (user)
+- Do: what the user does
+- See: what the user reports back
 
-- Lead with the point. Contractions are fine.
-- No em dashes or semicolons. Use a comma or a period.
-- No rule of three. Two items, or a real list.
-- No throat-clearing: "in order to", "it is worth noting", "not just X but Y".
-- No buzzwords: delve, robust, comprehensive, leverage, utilize, seamless,
-  streamline, paramount, vital, crucial, elevate, unlock, load-bearing.
-- Concrete over abstract. Name the file, function, or flag, in backticks.
-- Structural markdown only: lists, checkboxes, fenced blocks, bold keywords. No
-  tables.
-- Shapes, not counts. A component is one sentence. A step is one actor and one
-  action. A pitch is one paragraph. Wrapping a paragraph onto one line does not
-  make it one line.
+----
 
-### Showing work
+## Review record
 
-The user's attention is the scarcest thing in the workflow.
+### User
+Q  the question  (user | open)
+A  the answer, and what moved if anything
 
-- Mark the step only when it changes. On entering a step, the first line is
-  `Step N of 8, name. plan/{plan-name}.md`, and a transition names both: `Step 3
-  done, entering step 4.` Messages within a step don't repeat the marker.
-- Everything shown at a checkpoint is a copy from above the fold of the plan
-  file, in a fenced block, with at most one framing sentence above it.
-- A decision the user arbitrates goes through `AskUserQuestion`, never prose.
-  Every question gets a context block: what the decision is, what recon found,
-  what the trade-off hinges on. The user sees none of your thinking, so a block
-  written only while thinking was never shown. When the question tool has a
-  context field, the block goes there; otherwise it goes in visible reply text
-  before the call. Name things in full, never "the first two" or a list the
-  user hasn't seen. The block carries the reasoning, the tool carries the
-  choice.
-- Every option names its trade-off. Recommend one, put it first, append
-  `(Recommended)`, and tie the reason to a constraint the user gave. Cite the
-  anchor. Options are real and exclusive. If two real options can't be named, do
-  recon first. If only the user can resolve it, ask them openly instead.
-- A reply to a follow-up is a short paragraph, or a delegate goes to find out.
-- For a change to a system the user knows, the pitch is a delta: what changes
-  and why.
+### Delegates
+Q  the question  (critic | recon | fresh reader | reviewer)
+A  the answer, and what moved if anything
+````
 
-### Compaction and resuming
+**Problem.** The agent drafts it from the request and the Q&A. The user
+rewrites it in their own words before the plan proceeds.
 
-At Checkpoint 3 the orchestrator prints, every run:
+**Overview.** Plain language, distilled from Details. It adds nothing Details
+does not hold. It is rewritten at Demo from the built code.
+
+**Decisions.** Each reads `Chose X over Y because Z. Fails when W.` A Decision
+is a real alternative that shapes structure or behavior and that convention does
+not settle. Nothing else. A reversed Decision is rewritten, never left beside
+its reversal. A file placed somewhere other than planned becomes a Decision.
+
+**Success criteria.** Each in two lines: what is true when it works, and how
+the user sees it. For a user-visible change, the exact command and what appears.
+For an internal change, a script under `scripts/verify/` in the repo that prints
+a result a non-reader can judge. The script stays so the demonstration can be
+rerun later.
+
+**Details.** Technical prose for implementers. It fixes what implementers must
+agree on before any stage is written: the interfaces and schemas between parts,
+where each piece lives, and the invariants no stage may break. Also how it
+works, why this shape, and where it fails. It is prose under bold lead words,
+one component or concern per paragraph, each paragraph leading with its
+point. Prose is the default. A diagram or a numbered walkthrough earns its
+place only when it shows something the prose cannot, such as a flow with
+branches, and never restates what the paragraphs already say. Where the
+build diverges from the plan, Details is edited in
+place at that moment, so the file describes what exists.
+
+**Stages.** The index sits above the stage blocks: one line per stage, title
+and verify phrase, for the user. Stages are in dependency order, each bounded by
+its Files, with independent stages marked so they can build in parallel in their
+own worktrees. In a stage block, Planned is one or two sentences, or the stage
+is too big. Verify is a check that would fail if the stage were wrong, not "add
+unit tests". Anything touching persistent state or a live system is checked
+against the real thing. A change that only shows in an interactive surface,
+such as a TUI command, is verified by a test of its logic with the host faked,
+and the surface itself is a user stage. Files is one line, comma separated, corrected to the
+actual list at stage end. A stage that belongs to the user, such as deploy,
+approve, or try the thing, has two fields only: `Do` and `See`. Outcome opens
+with a keyword: `done` in one sentence, `done-modified` with the one-line
+reason, `dropped` with why, or `pending`. A superseded stage collapses to its
+title and `dropped: superseded by N`. Only the orchestrator writes Outcomes.
+
+**Review record.** The ledger below the fold. Under User: the Q&A sessions
+and the design conversation, question and answer, with an open question marked
+`(open)` until it is answered. Under Delegates: critic questions with their
+answers, recon conclusions, fresh-reader guesses with their fixes. The Q/A form
+with attribution is kept because it has caught real bugs before code. Every
+entry says what moved, or that nothing did.
+
+**Hub and spoke.** When a plan would run past about five stages, discuss with
+the user whether it should be split. The **hub** is `plan/{hub-name}.md` and
+holds three things: `## Problem`, `## Spokes` as a list with one line per spoke,
+`{nn} {spoke-name}: {step}`, and `## Decisions` for choices that cross spokes.
+It has no Design, no Stages, and no Review record. It is never built from. Each
+**spoke** is `plan/{hub-name}-{nn}-{spoke-name}.md`, a complete plan of this
+template with its own Problem, written from the hub's Problem and the spoke's
+line. Each spoke runs this skill on its own: its own Q&A, design review, build,
+branch, and commit pass. A spoke's Problem names its hub in its first line. The
+hub is created at Checkpoint 1 when the split is agreed, with the spoke list in
+the order they are built. When a spoke is merged, its line in the hub reads
+`merged`. When every spoke is merged, the hub moves to
+`plan/archive/unreleased/` with them. A decision made inside one spoke that
+another spoke must honor is copied up to the hub's Decisions at that moment.
+
+**Rules.**
+
+- A fact lives in one place. Success criteria, Decisions, Details, and Planned
+  each hold their own kind of fact.
+- A correction edits the line it corrects. Never append a correction.
+- Recon stays in scratch. The plan holds its conclusions, not its findings.
+- Plan files are committed. They are the record and ship with the code.
+  Scratch is never committed. On the first run in a repo, add `plan/scratch/`
+  to `.gitignore`.
+- The plan file stays uncommitted until the demo is done. It changes through
+  every phase, and a committed copy would be stale by the next stage. It is
+  committed once, by the user, as the last commit of the commit-flow pass.
+
+## Running the phases
+
+### Request and Q&A
+
+The user says what they want. Name the plan in kebab-case after the thing the
+user named, `stash-list` for "a /stash list command". Before the first
+question, quick recon on a free model reads the repo so the questions are
+grounded.
+
+The goal of Q&A is a deep, shared understanding before anything is designed: the
+user's intent, the design questions it raises, every ambiguity and vague spot,
+edge cases, failure modes, and what done looks like. It runs in cycles.
+
+- **User round.** Questions organized by theme, each with context, as many as
+  the theme needs.
+- **Delegate round.** Recon fills gaps. A critic on a different model pokes at
+  the forming requirements and asks what a skeptical lead would. Every settled
+  answer goes in the Review record under Delegates.
+- **Next user round.** Open with a short statement of what you now understand,
+  so drift is corrected cheaply. Then only the questions delegates could not
+  settle and the new ones they raised.
+
+Cycles repeat until a user round produces nothing new. Two is typical. Past
+about five stages, propose a hub with spokes and the user agrees or declines.
+
+**Success criteria** are agreed here, with the user, in session. Both lines of
+each are settled before Checkpoint 1.
+
+**Checkpoint 1.** Ask through the question tool: just do it, or plan. If the
+repo has none of the gates named under Build, ask in the same round whether
+stage 1 adds them or this plan skips them.
+
+On just do it, there is no plan file. Do the work in this session, commit
+under the Commits form, and offer `commit-flow` at Handover when done.
+
+On plan, create the branch and worktree: branch `{plan-name}` under the repo's
+prefix convention if it has one, such as `feat/`, and the worktree where the
+repo already keeps them, else beside the repo as `../{repo}-{plan-name}`. One
+plan to one branch to one worktree, and parallel plans never share a working
+tree. Create `plan/{plan-name}.md` with the `base:` line set to the commit the
+branch left from and Success criteria written. Draft `## Problem`, and the
+user rewrites it before the plan proceeds. Say that the user is next needed at
+the design review.
+
+### Plan
+
+Background. Write the plan file in this order.
+
+1. **Details.** The orchestrator writes it first, from the Q&A and the recon,
+   so that what implementers must agree on is fixed before any stage is
+   written.
+2. **Stages.** The orchestrator writes the stage blocks, then the index above
+   them.
+3. **Critics.** Two delegates on a different model, sent together with
+   `references/critic.md`, one told the design half and one the placement
+   half. Each writes to its own file under scratch. Copy their questions into
+   the Review record under Delegates, then answer every one or change the plan
+   and say what moved. A question only the user can answer is held for the design review.
+4. **Decisions.** The orchestrator curates them from the critics' answers.
+5. **Overview.** The orchestrator writes it last, from Details.
+6. **Editor pass** on the whole file above the fold and on the Review
+   record's User entries. See Working rules.
+
+### Design review
+
+Session. This is the step the whole skill exists for. It is the one point where
+the user takes possession of the design before code exists, and the whiteboard
+bar is met or missed here. It is never folded into question-tool rounds or
+skipped because the design was discussed earlier in pieces. Hold it even when
+every Decision was already agreed one at a time, because the user has not yet
+seen them together.
+
+The user's job in it: for each Decision, ask whether they could explain to a
+teammate why X over Y, and point at any they could not. Challenge each `Fails
+when` that would hurt a real user. Confirm each Success criterion is something
+they want to see at the demo, and that none is missing. Judge the Stages index
+for shape, not detail. Then say approved. They do not read Details line by
+line, that is for implementers and the fresh readers.
+
+A conversation, not a page, and the user sets the depth. Give the shape
+in a paragraph, then the Decisions as one line each, and ask which to go deeper
+on. Justify those, with the spike evidence where there is any, and say plainly
+where no justification exists. "No reason beyond convention" is an acceptable
+answer. A confident guess is not. Show Success criteria and the Stages index the
+same way, as lists the user points into. Held questions go through the question
+tool.
+
+Every change is written into the file as it happens, and the user's questions
+and answers go in the Review record under User. The session ends when the user
+says approved. Say that the fresh-reader check runs next in background and that
+the user is called back only if it raises a question needing them.
+
+**Fresh-reader check.** Background, after the user says approved. A delegate on
+another model gets `references/fresh-reader.md` and the plan file path, nothing
+else. The brief defines what it reports and what counts as a guess. The
+orchestrator sorts the findings: a guess becomes a stated fact in Details,
+a contradiction with the code is corrected, and anything that would need the
+user is raised through the needs-input notification. Then one more pass on a
+third model with the same brief. Two passes is the cap. What a second pass still
+reports is fixed and the check ends. Each pass adds to Details only what closes
+a guess. A line that tells the implementer how to type something they could
+not get wrong does not belong there.
+
+When the check ends, print, every run:
 
 > Plan approved at `plan/{plan-name}.md`. Run `/compact focus on the plan file
 > at plan/{plan-name}.md and the pending stages`, then invoke this skill with
 > the argument `implement`.
 
-Build works from the plan file, not from the orchestrator's memory of the
-debate, or Outcomes drift toward what was argued instead of what was approved. A
-controlled compaction here also beats an automatic one mid-stage.
+Build works from the plan file, not from memory of the debate. Say that the user
+is next needed at the demo.
 
-Invoked with no argument, the skill starts at step 1, or resumes a plan in
-`plan/` whose `step:` line matches the request. Invoked with `implement`, it
-resumes at step 7. A plan in `plan/done/` is never resumed.
+### Build
 
-## Step 1 and 2: Request and Q&A
+Background. Three steps per stage, in dependency order, independent stages in
+parallel in their own worktrees.
 
-The user states what they want. The orchestrator names the plan in kebab-case
-and opens a back-and-forth that runs until the requirements are clear. Multiple
-rounds are expected. Wanting to move on after one round means edge cases are
-being skipped, so run another. There is no cap.
+1. **Implement.** A delegate gets `references/implementer.md`, the plan file
+   path, and the stage number. It builds, passes Verify and the gates, and
+   commits the stage once.
+2. **Review.** A delegate on another model gets `references/reviewer.md`, the
+   plan file path, the stage number, and the commit. It edits to the cleanup
+   bar, folds its fixups into the stage commit, and rewrites the message under
+   the Commits form. It returns what it changed and anything it left because
+   it would change a Decision.
+3. **Record.** The orchestrator writes the Outcome per the spec. Where the
+   build diverged from the plan, it edits Details and Decisions in place now,
+   and corrects Files to the actual list.
 
-Each dimension gets checked where it applies: success criteria in observable
-terms, requirements and non-goals, interfaces and their constraints, edge cases,
-failure modes, prior art in the repo, and what verification the user expects.
-Every decision follows the question rules in Showing work: recon first, context
-block, grounded choice.
+Verify is a condition both the first two steps must pass, not a step of its own.
+The build never waits for the user, with one exception: a user stage stops the
+stages that depend on it until the user reports back, raised through the
+needs-input notification.
 
-Throughout, cheap-model recon runs in the background: how a subsystem works, where a
-thing is defined and who calls it, what pattern the repo uses. Recon briefs are
-read-only and ask for Findings, Relevant files, and Open questions, written to
-`plan/scratch/{plan-name}/recon-{topic}.md`. The orchestrator verifies a recon
-judgment call before it reaches the plan.
+**Blocking questions.** A question is blocking when a stage cannot reach its
+Verify without the answer and nothing in the plan file or the repo's conventions
+supplies it. A choice between equivalents is not blocking: pick one and record a
+Decision. Raise a blocking question at once through the needs-input notification
+and record it in the Review record as open. The blocked stage waits. Stages that
+do not depend on it proceed. Never resolve a blocking question by guessing.
+Batch non-blocking questions for the next session.
 
-When the approach rests on an assumption that would change everything if false,
-spike it: a delegate writes throwaway probe code under scratch and returns a
-verdict with evidence. A failed spike pivots the approach now.
+**Gates.** A stage is not done until Verify passes and the repo's lint,
+complexity, nesting, docstring, and import boundary gates pass. The repo owns
+the thresholds and the skill never states them. If the repo has none, the user
+decided at Checkpoint 1 whether stage 1 adds them. Gate results are one line in
+the Outcome.
 
-**Checkpoint 1.** When the ambiguity is small and risky assumptions are checked,
-the orchestrator either offers to just do the work in conversation, for anything
-a plan would not improve, or creates `plan/{plan-name}.md` with Summary and
-Scope and shows them with the offer to continue. The user picks through
-`AskUserQuestion`.
+**Commits.** Each stage ends in one commit on the plan's branch. The form
+below is copied in `references/implementer.md` and `references/reviewer.md`,
+and the copies must match this one. The title
+carries the stage and says what the change does, under about 60 characters:
+`[s2] client: ask the server for its minimum client version`.
 
-## Step 3: Whiteboard
+The body has two parts separated by a line holding only `---`. Above it, the
+technical description. Below it, the plain description. Either part is as long
+as it needs to be, in as many paragraphs as it needs. Inside a paragraph there
+are no line breaks: each paragraph is one line, however long, so `lazygit` and
+GitHub wrap it to their own width.
 
-The orchestrator writes the Design section itself, from the Q&A and the recon
-anchors: the structure chart, the components in one sentence each, the primary
-path as numbered steps, and candidate Decisions. Then it writes Contracts below
-the fold: the interface, schema, or event shape each component exposes to the
-others. No code. The design says what each piece owns and how the main job moves
-through them, not how any function works.
+The technical part is written in Plain language. Its first sentence says what
+the change makes possible or prevents, and why. What follows names the pieces
+that matter to a reader deciding whether to open the diff, and any behavior
+that would surprise them. It is not an inventory of the diff: a sentence that
+lists identifiers is describing the diff, and the diff is already there.
 
-## Step 4: Grilling
+The plain part is for a reader who has never seen the code: what is different
+for them now.
 
-A critic on a different model reads the plan file and the repo and appends to
-the Review record the questions a skeptical lead would ask. Where does this
-fail. Why this boundary and not that one. What from Scope is missing. What is
-here that nobody asked for. Questions, not a review. Not naming, not lines.
+```
+[s2] client: ask the server for its minimum client version
 
-The orchestrator answers every question in the Review record, a sentence or two
-each, or changes the design and says what moved. When an answer needs the user,
-it asks the user now, through the question rules, rather than guessing. One
-pass.
+Adds client_info() so KernelClient can ask the server for the oldest client version it still supports. The call has a 2 s timeout so a slow server cannot stall a turn. The User-Agent default now merges through httpx.Headers, so a caller's header wins under any casing and nothing is sent twice.
 
-Then it curates Decisions from the record: a question becomes a decision only if
-it had a real alternative. Each reads `Chose X over Y because Z. Fails when W.`
-A question whose answer was "no change" stays in the record.
+---
 
-## Step 5: Design review
+The tool can now find out if it is too old for the server.
+```
 
-**Checkpoint 2.** The orchestrator shows the page above the fold: Summary,
-Scope, Design, Decisions. Any question still open goes through `AskUserQuestion`
-with its context block. The user follows up on anything thin, and every follow-up
-and its answer is appended to the Review record. A follow-up that changes the
-design sends the affected part back through step 4. When nothing is open, the
-orchestrator asks whether the design is approved.
+A cleanup commit has the same form. Within a stage, before Record, the
+reviewer folds its fixups into the stage commit and rewrites the message under
+this form, so each stage is one commit. After Record, no commit is touched. A
+fix after the user's review is a new commit titled with the stage it fixes.
+Nothing is pushed. These commits are the agent's record, and the user rewrites
+them later. The plan file is never part of a stage commit, and it is not
+committed on its own either until the demo is done.
 
-## Step 6: Staging
-
-The orchestrator projects the approved design onto stages and appends the Stages
-section. Each stage carries Planned, Verify, Touches, and Outcome pending.
-
-- **Planned is intent.** The components the stage delivers and the observable
-  result, in a sentence or two. If it needs more, the stage is too big or it is
-  describing how. The how lives in Contracts and in the code.
-- **Verify is a check that would fail if the stage were wrong.** Not "add unit
-  tests." Pure logic gets unit checks. Anything touching persistent state or a
-  live system gets a check against the real thing, spelled out. The plan names
-  at least one end-to-end scenario.
-- **Size is three conditions**, and component count is not one of them: one
-  implementer can build it without compaction, the repo is working and green
-  when the stage is complete, and one Verify covers it. Ten trivial stages are worse than
-  three right-sized ones.
-- **Order follows dependency.** No stage depends on a later one.
-- **Every component is delivered by some stage.** That is what lets the final
-  review check built against approved.
-- **A stage too big for one implementer gets a sub-plan** at
-  `plan/{plan-name}-{nn}-{stage}.md`, built by running steps 3 to 6 on that
-  stage alone. The parent stage collapses to its title, the pointer, and
-  Outcome. The parent never restates what the sub-plan owns.
-
-A critic on a different model then reviews the stages with the repo open,
-through two lenses, and returns findings. The split: boundaries follow the
-design, order follows dependency, each stage meets the size conditions, each
-Verify would catch a real defect, nothing restates the design. The structure:
-where new code goes, whether it reuses what the repo already has, whether two
-stages are about to write the same logic, whether names follow the repo's
-conventions. Placement and boundaries, never function bodies. The orchestrator
-revises.
-
-**Checkpoint 3.** The user sees one entry per stage, `N  title  planned: phrase
-verify: check`, and adjusts boundaries, not contents. On approval the
-orchestrator prints the compaction instruction.
-
-## Step 7: Build
-
-For each pending stage, in order:
-
-1. **Build.** The implementer gets the plan file path and its stage. It builds
-   from Planned, Contracts, and the code, runs Verify, and returns a summary of
-   what changed and what passed. If the stage is underspecified it returns
-   blocked with the question, and the orchestrator resolves it, asking the user
-   if needed.
-2. **Clean up.** A reviewer on a different model class reads the working-tree
-   diff scoped to the stage's Touches plus any file the implementer reported,
-   edits it directly to the bar below, reruns Verify, and returns what it
-   changed and anything it left because it would change a design decision.
-3. **Record.** The orchestrator confirms Verify passed, ticks the box, and
-   writes the Outcome at the altitude of components, not files. A divergence
-   from Planned is recorded, not papered over. When a divergence moves code, Map
-   to code is updated. Design and Decisions stay as approved.
-
-The bar the cleanup reviewer edits to, on top of the repo's own conventions and
-its lint and test commands, which the brief names:
+**Cleanup bar.** Copied in `references/reviewer.md`, and the copy must match
+this one. On top of the repo's conventions and gates:
 
 - Functions are small, with shallow nesting and one job each.
+- Each file does one thing, and it is what the module name says.
 - No comment narrates the line below it. A comment exists only for a quirk the
-  reader can't infer: a rejected alternative, a required ordering, a magic
+  reader cannot infer: a rejected alternative, a required ordering, a magic
   value's source.
-- Docstrings lead with what the unit does, in the imperative, and restate
-  nothing the signature says.
+- Docstrings follow Plain language: an imperative first line saying what the
+  unit does, nothing the signature already says.
 - Comments and docstrings are self-contained. No reference to plans, stages, or
   "the new X".
-- Arguments are named at call sites when a call takes more than one and the role
-  isn't obvious.
 - Naming follows the language's convention and the repo's existing style.
 - No dead code, no leftover scratch, no logic duplicated across stages.
 
-## Step 8: Hand-off
+### Demo
 
-One or two reviewers read the whole diff against the plan file and write
-findings to scratch: for each component, whether it exists and matches its
-sentence. Whether the primary path holds. Code that maps to no component. Stages
-where Planned and Outcome differ.
+First, in background. Rewrite Overview from the built code and the current
+Details. Then a second fresh-reader check: a delegate on another model gets
+`references/fresh-reader.md`, the plan file path, and the word that the code is
+built. It names every line where the file no longer describes what got built.
+Fix each in place. Then an editor pass on Overview, Decisions, and Details.
 
-A divergence the reviewers find that no Outcome records is a hole in the ledger.
-The orchestrator corrects that Outcome before presenting. Then it shows one
-line, everything built as approved or these stages diverged, followed by the
-divergences and unmapped code, one entry each. The user asks about the ones that
-matter and chooses: the `commit-flow` skill, or the findings that become
-further stages, and Build resumes at step 7.
+Then, in session. Go down Success criteria in order. For each, the user runs the
+named command, or sees the script's output, and confirms what appears. After the
+last criterion, list divergences, one line each with the Decision that moved,
+and the open items in the Review record. A finding that needs more work becomes
+a follow-up plan or a spoke, never more stages.
 
-When the commits are merged, the run ends. The orchestrator sets `step:
-merged`, moves the plan and its sub-plans to `plan/done/`, and deletes
-`plan/scratch/{plan-name}/`. An active plan is one that still sits in `plan/`.
+Then invoke `commit-flow` at its first stage, Handover. That skill owns the
+user's pass: review in `tuicr`, squash and reword in `lazygit`, the read-back,
+and the push. Nothing leaves the machine before it. The plan file is committed
+there, by the user, as the last commit on the branch.
 
-## The plan file
+When the commits are merged, set `step: merged`, move the plan to
+`plan/archive/unreleased/`, delete `plan/scratch/{plan-name}/`, and update
+the spoke's status line in its hub.
 
-`plan/{plan-name}.md`, flat, with sub-plans beside it as
-`plan/{plan-name}-{nn}-{stage}.md` and scratch at `plan/scratch/{plan-name}/`.
-Every file has its own name, and `ls plan/` is the index of all work in flight.
-It is the source of truth after Checkpoint 3. It is written incrementally and
-never a phase of its own.
+## Working rules
 
-Above the fold is the user's page. Below it is the agents' material. A block
-shown at a checkpoint is copied from above the fold, never reformatted.
+### Session and background
 
-### Component
+The user is in the room for Q&A, the design review, and the demo. That is a
+**session**. Everything else is **background**, and no question reaches the user
+in it. Say which you are in and what you need from the user. Agree with the user
+when a session is done, and say when they are next needed.
 
-A component is a part of the design that other parts depend on through a written
-Contract. If nothing else relies on its interface, it isn't a component. It is
-internal to one. So the component list and Contracts have the same entries, a
-field or a lock or a file or a helper can't appear in the list, and a change
-with no new or altered interfaces has no components. Its Design is a
-before-and-after of behavior, and its stages are governed by Verify alone.
+### Delegation and evidence
 
-A component is named by what it owns, never by a filename. For a change to an
-existing system, a component that gets modified is tagged `changed`. One the
-path passes through untouched is a neighbor and appears only in the chart.
+Three tiers of model are available. Free (`glm`, `qwen`) for lookups, retrieval,
+reading the repo, summarizing, and any check with a mechanical answer, used
+without limit. Mid (`haiku`, `sonnet`) for recon with judgment, critique, and
+mechanical stages. Heavy (`opus-4.8`, sometimes `5.5`) for design-bearing
+implementation and for reviewing work a lower tier produced. A review always
+runs on a different model than the work it reviews.
 
-### Structure
+Each delegate is a fresh session that cannot read this skill. Its brief is a
+file under `references/` beside this skill, one per job, saying what to read,
+what to do, what to write where, and what to return. The task you give a
+delegate names the brief path and the inputs, nothing else, one per line with
+the brief first and every path absolute:
 
-````
-# {plan-name}
-step: N name  |  merged
-
-## Summary
-one paragraph: the problem, who asked, the shape of the solution, why
-
-## Scope
-- observable success criterion, one per line
-Not in scope:
-- one per line
-
-## Design
-```mermaid
-flowchart LR
-  A[Component] -->|relationship| B[Component]
-  B -->|relationship| N[Existing neighbor]
 ```
-- Component: one sentence, what it owns.  new
-- Component: one sentence, what it owns.  changed
+Brief: /abs/path/to/references/critic.md
+Plan file: /abs/path/to/plan/stash-list.md
+Half: design
+```
 
-Primary path
-1. Actor: one action
-2. Actor: one action
+The delegate reads the brief itself. Delegates write to `plan/scratch/{plan-name}/` or to
+the Review record under Delegates. Independent delegates run concurrently, sent
+in one message. Before any user round, send out whatever recon would make the
+questions sharper.
 
-On <the condition that forks the path>
-2. Actor: what happens instead, continue at 3
+A design choice reaches the user with evidence, not as a pair of adjectives.
+When X and Y are both plausible, a spike settles what can be settled: a
+throwaway script, test, or benchmark under scratch, run against the real repo,
+with its result in the question's context. The question shows a code snippet for
+each option where a snippet makes the difference visible. A proposal that could
+not be made to run is not offered.
 
-## Decisions
-- Chose X over Y because Z. Fails when W.
+A decision the user arbitrates goes through the host's question tool, never
+prose. Every question carries a context block: what the decision is, what recon
+or the spike found, what the trade-off hinges on. The user sees none of your
+thinking, so write the block into the tool's context field. Name things in full.
+Every option names its trade-off. Recommend one and tie the reason to a
+constraint the user gave.
 
-## Stages
-- [ ] **Stage 1: title**
-  - Planned: intent, a sentence or two
-  - Verify: the named check
-  - Touches: files
-  - Outcome: pending
-- [ ] **Stage 2: title**  see {plan-name}-02-title.md
-  - Outcome: pending
+### Prose
 
-----
+These rules cover every line written for the user, including the plan file and
+commit bodies. Pass them into any brief whose output the user reads.
 
-## Contracts
-Component: the interface, schema, or event shape others rely on
+- Lead with the point. Contractions are fine.
+- No em dashes or semicolons. Use a comma or a period.
+- No rule of three. Two items, or a real list.
+- No throat-clearing and no buzzwords: delve, robust, comprehensive, leverage,
+  seamless, streamline, crucial, unlock.
+- Concrete over abstract. Name the file, function, or flag, in backticks.
+- Structural markdown only: lists, fenced blocks, bold keywords. No tables.
+- Never estimate in time.
+- In commit messages and PR descriptions, no line breaks inside a
+  paragraph. Git clients wrap to their own width.
 
-## Review record
-Q  the question  (critic | user)
-A  the answer, and what moved if anything
+**Plain language** is a softened ASD-STE100. Prefer it in everything the user
+reads. It is required in Overview, the plain description in a commit body, and
+docstrings. Short sentences. One idea per sentence. Active voice, present tense.
+Common words. Verbs stay verbs: "the hook checks types", not "the hook performs
+type checking".
 
-## Map to code
-Component: path, path (new)
-````
-
-The chart shows structure, not sequence: nodes are the components plus the
-neighbors the path touches, edges are labeled with the relationship. The steps
-own the order. A step that does two things is two steps. A fork lists only the
-steps that differ and where the path resumes. Where the design fails is a
-Decision or a Review record entry, not a flow.
-
-### Outcome
-
-The checkbox means settled, not done as planned. Outcome opens with a keyword:
-`done` in one sentence, `done-modified` with what changed and why, `dropped`
-with why and `[x]`, or `pending`. A stage added during Build carries `added:
-why` on its title line. Only the orchestrator writes Outcomes.
-
-### Rules
-
-- A fact lives in one place. Scope, Decisions, Contracts, and Planned each hold
-  their own kind of fact and don't restate each other's.
-- A correction edits the line it corrects. Never append a correction.
-- Recon stays in scratch. The plan holds its conclusions, not its findings.
-- A sub-plan owns its detail. The parent holds a pointer and an Outcome.
-- Scratch holds recon reports, spike probes and verdicts, and review findings.
-  It is deleted when the run ends and never committed: on the first run in a
-  repo the orchestrator adds `plan/scratch/` to `.gitignore`. Whether `plan/`
-  itself is committed follows the repo's conventions.
-- A merged plan leaves `plan/` for `plan/done/`, so `ls plan/` lists only work
-  in flight.
-
-## Anti-patterns
-
-- Planned fields that narrate code. Intent in a sentence or two, or the stage is
-  too big.
-- Fields, locks, files, or helpers listed as components.
-- The same fact in Scope, Decisions, and Planned.
-- Corrections appended below the line they correct.
-- A parent stage that restates its sub-plan.
-- "Add unit tests" as a Verify.
-- A critic that writes a review instead of questions.
-- A design question guessed at when the user could have answered it.
-- Time estimates.
-- A delegate writing an Outcome, or committing.
-- References to the plan, stages, or steps inside code or docstrings.
-- A message that re-announces the current step when it hasn't changed.
+**Editor pass.** Before the user reads a plan file, a fresh mid-tier delegate
+edits it for reading. Its brief is `references/editor.md`, and the delegate
+reads it directly. The task you give it is one line: the file path
+and the sections. The brief holds the rules, so never paraphrase them into
+the task. When it returns, read the diff of the plan file and revert any line
+where a fact changed and not only its phrasing. Anything the delegate lists
+under possible fact issues, you resolve. The pass runs after Plan step 5,
+after the Demo rewrite of Overview, and on the Handover blocks in
+`commit-flow`. Run it on the context block of any question with more than a
+paragraph of context.

@@ -1,180 +1,92 @@
 ---
 name: commit-flow
-description: Read the working-tree diff and the plan doc, propose a draft plan of commit groups, and stage them one group at a time so the user writes each message and commits. Re-syncs the plan when the user revises code mid-flow. Use when the user asks to "commit-flow", "group my changes into commits", "help me commit this work", or wants to break a diff into clean commits.
+description: "The user's pass over a branch that agents built, in four stages the orchestrator announces and never advances on its own: handover, review, proofing, publish. Use when the user says commit-flow, handover, review, proofing, or publish about such a branch, or runs /commit-flow <stage>."
 ---
 
 # Commit Flow
 
-Turn a pile of working-tree changes into a sequence of clean commits. The agent
-reads the diff, reads the plan doc behind the work, and proposes groups of
-files. Each group is one commit, and each carries a ready `git add` block. The
-user runs it, reviews the staged files in their IDE, writes the commit
-message, and commits, then moves to the next group.
+The branch holds one agent commit per stage. Titles read `[s3] store: add
+export table`. Bodies carry the technical description, a `---` line, then
+the plain description. Fix and cleanup commits have the same form. The plan file's
+Review record is where this skill writes.
 
-This skill keeps the user's structural model of the repo sharp. Small commits
-with clear boundaries tell the user which files hold which components and what
-each module does.
+Two roles. The user reads in `tuicr`, then squashes and writes in
+`lazygit`. The agent never amends, squashes, rewords, or pushes, and never
+writes a title, body, or description. Each stage below is also a command,
+`/commit-flow <stage>`, so the pass works days later in a fresh session. The
+base is the plan file's `base:` line, or the one the user gives.
 
-The first proposal is a draft. The user often reviews the diff, asks agents to
-make changes, then comes back. The work happens in one session, so the agent
-already holds the draft plan in context. On return, the agent re-reads the tree
-and re-syncs the plan against it. No plan file is written to disk.
+## Handover
 
-## Roles
+Starts when the build is done, or the user says "handover".
 
-- **Staging.** Each commit section carries a `git add` block. The user runs it,
-  or asks the agent to stage that group. One group at a time.
-- **The user commits.** The user writes every commit message and runs the
-  commit. The agent never writes a message and never commits.
+1. Run `git log --reverse <base>..HEAD` and read the plan's Stages.
+2. Write one short block per intended commit: what it does in plain words,
+   the entities changed, and what Verify showed.
+3. Do not paste the diff. The user opens it when a block raises a question.
+4. Editor pass on the blocks before they are shown: a fresh delegate reads
+   `../orchestrate/references/editor.md` relative to this skill and edits the blocks
+   for reading. Facts stay as they are.
 
-## Steps
+Close with: `Review when ready.`
 
-### Step 1: Read the diff and the plan
+## Review
 
-Look at the full working tree before proposing anything.
+Starts when the user says "review" after reading in `tuicr`.
 
-- `git status --porcelain` for the file list, including untracked, deleted, and
-  renamed files.
-- `git diff` for unstaged changes.
-- `git diff --staged` for anything already staged.
+1. Run `tuicr review list --repo .` and keep the sessions on this branch.
+2. For each, run `tuicr review comments --session <slug> --repo .`. Skip a
+   session with no comments.
+3. Per comment, make one fix stage. Fix the code, run that stage's Verify,
+   and make a new commit titled with the stage it fixes, such as
+   `[s3] fix: ...`. Never amend.
+4. Copy comment, reply, and commit hash into the Review record under User.
+   With no plan file, put the list in your reply.
+5. Only after step 4, run `tuicr review clearc --session <slug> --repo .`.
+6. Rerun Verify and the gates. Report the result.
 
-If files are already staged, note it. Fold them into the group proposal instead
-of ignoring them.
+Close with: `N fixes landed. Review again, or proofing.`
 
-Then read the plan doc behind the work. Most changes here start from a plan
-file. It carries the intent the raw diff can't show: why these files changed
-together, which change belongs to which task, what's a follow-up. Use it to
-group by intent and to write sharper descriptions.
+## Proofing
 
-- Look for the plan doc first. Check `plan/`, `plans/`, and `tmp/` for a recent
-  markdown plan, and check this session's context in case the plan was written
-  here.
-- If one plan doc is the obvious match, read it.
-- If none turns up, or several could match, ask the user to point at the plan
-  doc. If there's genuinely no plan, say so and group from the diff alone.
+Starts when the user has squashed and written in `lazygit` and says
+"proofing".
 
-### Step 2: Propose commit groups
+1. Start a fresh agent through the subagent tool. Not the builder.
+2. Its task is `../orchestrate/references/proofing.md` relative to this
+   skill, the plan file path, and the base ref. The brief holds the two
+   questions it answers per commit and the form of its output.
+3. Relay the output as is, and copy it into the Review record under
+   Delegates.
 
-The proposal has two parts: a summary table and a section per commit.
+Close with: `Amend what you want, then proofing again, or publish.`
 
-First, a summary table. Two columns: commit number and a one-line summary. This
-is the at-a-glance index. Order the rows in the sequence the user should commit
-them, dependencies first. Source and docs come first. Tests come after. The
-plan doc, if it changed, is always the last row.
+## Publish
 
-| Commit | Summary |
-| --- | --- |
-| 1 | Stream the feature pipeline in batches |
-| 2 | Document the batch-size flag |
-| 3 | Unit tests for the batch iterator |
-| 4 | Plan doc for the batch streaming work |
+Starts when the user says "publish" with a description file.
 
-Then, one section per commit. Each section has a bold heading, a description
-of the change, an `In short:` recap, and a `git add` block that stages exactly
-those files. The description is technical: what changed, in the terms the code
-uses. The recap is plain English: what a reader with no context would
-understand the commit to do. The `git add` block puts one file per line with
-`\` continuations, so it doubles as the file list and is easy to scan.
+1. Ask for the file path if you lack it. Never draft or edit the file.
+2. Run the Proofing steps on the description, with the file added to the
+   brief. Relay the output as is.
+3. If anything is flagged, stop. The user edits, then says "publish" again.
+4. If it holds, say so and wait. The user says "push". This is the first
+   thing to leave the machine.
+5. Run `git push -u origin <branch>`, then `gh pr create --title <title>
+   --body-file <file>` with the title the user supplies.
+6. Copy the proofing output and the PR URL into the Review record under
+   Delegates.
 
-**Commit 1 — Stream the feature pipeline in batches**
+Close with: `PR created: <url>.`
 
-Rework the feature pipeline to stream batches from the loader instead of
-holding the whole frame in memory. `transforms.py` moves to lazy column ops,
-and `loader.py` yields batches the pipeline pulls on demand.
+## If asked how to group
 
-In short: the feature step used to load everything at once and ran out of
-memory on big runs. Now it works in chunks.
+Answer from the log and the plan. Never run the squash.
 
-```
-git add \
-  src/delphi/features/pipeline.py \
-  src/delphi/features/transforms.py \
-  src/delphi/io/loader.py
-```
-
-Rules for the proposal:
-
-- **Group by intent.** Files that make one logical change go in one commit.
-  Don't mix unrelated changes. Ask if unsure.
-- **End each section with a `git add` block.** List that commit's exact paths in
-  a fenced code block so the user can copy and run it. One path per line, each
-  line ending in `\` except the last, indented two spaces. This block is the
-  file list; don't repeat the paths elsewhere in the section.
-- **Tests commit last, in their own commits.** Source and docs commit first.
-  Then the tests, never mixed with the source they cover.
-- **Split tests by type.** Unit, integration, and nightly tests each get their
-  own commit. Never batch two test types into one commit. Drop a type if the
-  diff has none of it.
-- **Plan doc commits last, alone.** If the plan doc from Step 1 shows up in
-  `git status` (new or modified), it is its own commit and it is the final
-  one, after every test commit. Never fold it into a source, docs, or test
-  group. If the plan doc didn't change, there is no plan commit.
-- **Description, then `In short:`.** The description is in the code's own
-  terms, with paths and identifiers in backticks. Use as many paragraphs as
-  the change needs, but stay tight. Then a paragraph starting with
-  `In short:` that restates it with no jargon. The recap is the only labeled
-  part; don't label the description.
-- **No separate file list.** Don't bullet the files or put them in a table
-  cell, and don't use `<br>`, `<ul>`, or `<li>` tags. Claude Code's terminal
-  renderer can't render them. The `git add` block is the list.
-- **Backtick every path in prose.** Any file path mentioned in a summary is a
-  code identifier.
-- **List every changed file.** Every path from `git status` lands in exactly one
-  commit's `git add` block. Don't drop files.
-
-After the proposal, stop and wait. The user may merge commits, split them, or
-reorder. Adjust until they approve.
-
-### Step 3: Hand off the first group
-
-On approval, point the user at the first commit's `git add` block. They run it,
-review the staged files in their IDE, write the message, and commit. If the user
-would rather the agent stage, run `git add` on that commit's exact paths. Either
-way, stage only one group at a time.
-
-> Commit 1 is ready. Run its `git add` block, review in your IDE, write your
-> message, and commit. Tell me when you're on to the next group.
-
-### Step 4: Move to the next group
-
-When the user says to continue, first confirm the previous group is committed.
-Run `git status --porcelain`. If the last group's files still show as staged or
-modified, say so and wait. Don't stack two groups in the index.
-
-Once the tree is clean of the last group, point the user at the next commit's
-`git add` block (or stage it on request) and hand off again. Repeat until every
-group is committed.
-
-### Step 5: Re-sync the plan after revisions
-
-The user often reviews the draft, asks agents to change the code, then returns
-to keep committing. The tree has moved since the draft. Re-sync before staging
-anything more.
-
-The draft plan is already in the session context, so this is a file-set
-reconciliation, not a fresh start. Re-run `git status --porcelain` and
-`git diff`, then compare the current changed files against the draft:
-
-- **Still changed, already grouped** → keep it in its commit.
-- **Changed now, not in the plan** → new file. Propose a commit for it, or add
-  it to a fitting group. Flag it as new.
-- **In the plan, no longer changed** → already committed, or reverted. Mark it
-  done or drop it.
-
-Refresh the descriptions from the current `git diff`, and re-read the plan doc
-if the work grew past it. Re-present the updated plan, calling out what changed
-since the draft. Then continue staging.
-
-## Guidelines
-
-- **One group in the index at a time.** Never stage ahead. The user commits
-  before the next group is staged.
-- **Stage exact paths.** Use explicit file paths with `git add`. Don't use
-  `git add .` or `git add -A`.
-- **Handle deletes and renames.** `git add` stages a deletion. A rename is the
-  old path and the new path. Include both.
-- **Re-sync on drift.** If the tree changed since the proposal, the user edited
-  a file, or a group turned out wrong, re-sync the plan per Step 5 before
-  staging.
-- **Don't commit.** Even if the user seems to want it, confirm before running
-  `git commit`. The default is that the user commits.
+- A group is a contiguous run of stage commits that make one intent, with
+  its own code, tests, and docs.
+- Docs or tests get a separate commit only when they are their own intent.
+- The plan file commit goes last, alone.
+- A fix that cannot be reordered without conflict stays its own commit, with
+  the user's message.
+- The test: the user can write the group's title from the plan and the
+  commit bodies before reading the diff.
