@@ -29,6 +29,18 @@ export function editDiffLines(item: ToolItem): string[] | undefined {
 	return diff.split("\n");
 }
 
+/** Lines added and removed by an edit's diff; zeros when the call is not an edit or has no diff yet. */
+export function diffCounts(item: ToolItem): { added: number; removed: number } {
+	const lines = editDiffLines(item) ?? [];
+	let added = 0;
+	let removed = 0;
+	for (const line of lines) {
+		if (line.startsWith("+")) added++;
+		else if (line.startsWith("-")) removed++;
+	}
+	return { added, removed };
+}
+
 /** Each argument as `key: value`, then a blank line and the result text capped at MAX_RESULT_LINES. */
 export function expansionLines(item: ToolItem): string[] {
 	const args = Object.entries(item.args).map(
