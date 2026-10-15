@@ -63,7 +63,13 @@ function paintResult(details: AskDetails, expanded: boolean, theme: Theme): Text
 
 const OptionSchema = Type.Object({
 	label: Type.String({ description: "The choice, in a few words." }),
-	tradeoff: Type.Optional(Type.String({ description: "What this choice costs or risks, one line." })),
+	detail: Type.Optional(
+		Type.String({
+			description:
+				"What the user needs to know about this choice beyond the label: what it changes, what it costs, what it rules out. " +
+				"One or two sentences, shown under the label. Omit it when the label already says everything; never write filler like 'none'.",
+		}),
+	),
 	recommended: Type.Optional(
 		Type.String({ description: "A one-line reason this is your pick. Put it on at most one option, and only when you have a view." }),
 	),
@@ -104,7 +110,7 @@ const PROMPT_SNIPPET = "ask: show the user a form of up to six questions and wai
 
 const PROMPT_GUIDELINES = [
 	"Gather every open decision that does not depend on another's answer into one ask call, and read enough first that every option you offer is viable.",
-	"Your thinking is never shown to the user. Put every finding behind an ask question into its `context`, and write option labels and tradeoffs that make sense without your reasoning.",
+	"Your thinking is never shown to the user. Put every finding behind an ask question into its `context`, and write option labels and details that make sense without your reasoning.",
 	"When an ask answer is `needs clarification`, the question was unclear: re-ask it in prose in your reply, not with another ask call.",
 ];
 

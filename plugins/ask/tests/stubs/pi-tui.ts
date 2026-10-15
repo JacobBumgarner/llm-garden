@@ -38,8 +38,22 @@ export interface Focusable {
 }
 
 export interface TUI {
-	terminal: { rows: number; columns: number };
+	terminal: { rows: number; columns: number; write(data: string): void };
 	requestRender(): void;
+}
+
+export interface NativeClipboard {
+	setText?(text: string): Promise<void>;
+}
+
+/** Tests have no native clipboard, so copies fall back to the terminal write. */
+export function getNativeClipboard(): NativeClipboard | undefined {
+	return undefined;
+}
+
+/** Stub text carries no escape sequences; the identity keeps the view's calls typed. */
+export function stripTerminalSequences(text: string): string {
+	return text;
 }
 
 export interface EditorTheme {

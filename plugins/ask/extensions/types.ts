@@ -6,7 +6,7 @@ export type { KeyName };
 
 export interface AskOption {
 	label: string;
-	tradeoff?: string;
+	detail?: string;
 	/** Why this is the option to pick; set on at most one option per question. */
 	recommended?: string;
 	preview?: string;

@@ -42,7 +42,7 @@ function formatQuestion(question: AskQuestion): string {
 		for (const option of question.options) {
 			let line = `      - ${option.label}`;
 			if (option.recommended) line += `  (recommended: ${option.recommended})`;
-			if (option.tradeoff) line += `  — ${option.tradeoff}`;
+			if (option.detail) line += `  — ${option.detail}`;
 			lines.push(line);
 		}
 	} else {

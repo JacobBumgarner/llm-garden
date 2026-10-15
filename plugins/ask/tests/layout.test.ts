@@ -314,7 +314,10 @@ test("a previewed highlighted option gets a preview column at 120 columns and no
 test("the option column has no preview row while the preview has its own column", () => {
 	const view = layout(previewed(), WIDE, TALL_SCREEN, tall, { window: 0 });
 	assert.deepEqual(kinds(view.rows), ["question", "spacer", "option", "option", "option", "other", "hint"]);
-	assert.match((hintRow(view) as { text: string }).text, /shift\+arrows scroll code/);
+	const hint = (hintRow(view) as { text: string }).text;
+	assert.match(hint, /alt\+arrows scroll options/);
+	assert.match(hint, /shift\+arrows scroll code/);
+	assert.match(hint, /ctrl\+b copy code/);
 });
 
 test("the preview column and the option column share one budget", () => {
@@ -322,20 +325,34 @@ test("the preview column and the option column share one budget", () => {
 	assert.equal(view.budget, TALL_SCREEN - 1);
 });
 
-test("PgDn moves the preview offset by a window and leaves the option window alone", () => {
+test("beside a preview column PgDn pages and alt+down steps the option window, leaving the code alone", () => {
+	const s = previewed();
+	const screen = 6;
+	const top = layout(s, WIDE, screen, tall, { window: 0 });
+	const down = layout(s, WIDE, screen, tall, scrolledOffsets(top, "pageDown"), false);
+	assert.ok(down.windowOffset > top.windowOffset, "the option window moved");
+	assert.equal(down.preview?.offset, 0);
+	const up = layout(s, WIDE, screen, tall, scrolledOffsets(down, "pageUp"), false);
+	assert.equal(up.windowOffset, 0);
+	const step = layout(s, WIDE, screen, tall, scrolledOffsets(top, "alt+down"), false);
+	assert.equal(step.windowOffset, 1);
+	assert.equal(step.preview?.offset, 0);
+	assert.equal(layout(s, WIDE, screen, tall, scrolledOffsets(step, "alt+up"), false).windowOffset, 0);
+});
+
+test("a wheel target overrides the key's column: code for a wheel over the code, options over the options", () => {
 	const s = previewed();
 	const top = layout(s, WIDE, TALL_SCREEN, tall, { window: 0 });
-	const down = layout(s, WIDE, TALL_SCREEN, tall, scrolledOffsets(top, "pageDown"), false);
-	assert.equal(down.preview?.offset, TALL_PREVIEW - (top.budget - 1), "clamped to the last full window under the one-line header");
-	assert.equal(down.windowOffset, top.windowOffset);
-	const up = layout(s, WIDE, TALL_SCREEN, tall, scrolledOffsets(down, "pageUp"), false);
-	assert.equal(up.preview?.offset, 0);
+	const code = layout(s, WIDE, TALL_SCREEN, tall, scrolledOffsets(top, "pageDown", "code"), false);
+	assert.equal(code.preview?.offset, TALL_PREVIEW - (top.budget - 1), "clamped to the last full window under the one-line header");
+	assert.equal(code.windowOffset, top.windowOffset);
+	assert.equal(layout(s, WIDE, 6, tall, scrolledOffsets(layout(s, WIDE, 6, tall, { window: 0 }), "shift+down", "options"), false).windowOffset, 1);
 });
 
 test("the preview column follows the cursor: dropped for an option without one, reset for a different one", () => {
 	let s = previewed();
 	const top = layout(s, WIDE, TALL_SCREEN, tall, { window: 0 });
-	const scrolled = layout(s, WIDE, TALL_SCREEN, tall, scrolledOffsets(top, "pageDown"), false);
+	const scrolled = layout(s, WIDE, TALL_SCREEN, tall, scrolledOffsets(top, "shift+down"), false);
 	assert.ok((scrolled.preview?.offset ?? 0) > 0);
 	s = press(s, "down");
 	const next = layout(s, WIDE, TALL_SCREEN, tall, { window: scrolled.windowOffset, preview: scrolled.preview });

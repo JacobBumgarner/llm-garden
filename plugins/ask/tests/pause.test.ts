@@ -18,7 +18,7 @@ const questions = () =>
 				id: "access",
 				question: "Which access block?",
 				context: "Only gates picker visibility.",
-				options: [{ label: "Open to all" }, { label: "Restrict to AD groups", recommended: "matches the server gate", tradeoff: "fewer users see it" }],
+				options: [{ label: "Open to all" }, { label: "Restrict to AD groups", recommended: "matches the server gate", detail: "fewer users see it" }],
 			},
 			{ id: "name", question: "Display name?" },
 			{ id: "tags", question: "Which tags?", options: [{ label: "a" }, { label: "b" }], multi: true },

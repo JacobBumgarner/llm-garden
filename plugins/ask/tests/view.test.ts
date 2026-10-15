@@ -15,7 +15,16 @@ import type { Color, TUI, TuiMouseEvent } from "./stubs/pi-tui.ts";
 const ROWS = 40;
 const WIDTHS = [80, 160];
 
-const tui: TUI = { terminal: { rows: ROWS, columns: 160 }, requestRender() {} };
+/** Everything the form wrote to the terminal; copies arrive here as OSC 52. */
+const written: string[] = [];
+const tui: TUI = { terminal: { rows: ROWS, columns: 160, write: (data) => written.push(data) }, requestRender() {} };
+
+/** Decode the text of the last OSC 52 copy. */
+function lastCopy(): string {
+	const match = /\x1b\]52;c;([^\x07]*)\x07/.exec(written[written.length - 1] ?? "");
+	assert.ok(match, "something was copied");
+	return Buffer.from(match[1], "base64").toString("utf8");
+}
 const rgb = (r: number, g: number, b: number): Color => ({ kind: "rgb", r, g, b });
 const theme: Theme = {
 	colors: { accent: rgb(0, 0, 200), text: rgb(200, 200, 200) },
@@ -24,6 +33,7 @@ const theme: Theme = {
 	bg: (_c, t) => t,
 	bold: (t) => t,
 	underline: (t) => `_${t}_`,
+	inverse: (t) => `[${t}]`,
 };
 /** A theme that brackets accent text and braces styled text, for tests about what gets which color. */
 const accented: Theme = {
@@ -41,8 +51,8 @@ const questions = normalize({
 			question: "Which store?",
 			context: "Some context.",
 			options: [
-				{ label: "Zustand", recommended: "Small.", tradeoff: "Loose.", preview: code },
-				{ label: "Redux", tradeoff: "Heavy." },
+				{ label: "Zustand", recommended: "Small.", detail: "Loose.", preview: code },
+				{ label: "Redux", detail: "Heavy." },
 			],
 		},
 		{ id: "name", question: "Name?" },
@@ -187,4 +197,115 @@ test("hovering a row marks it with a dim pointer and hovering a tab underlines i
 	lines = form.render(160);
 	assert.match(lines[strip], /_○ Name_/);
 	assert.match(lines[redux], /^  2\. Redux/, "the row mark and color move away with the pointer");
+});
+
+/** A mouse event of any type at a point; `mouse("press", x, y)`. */
+function mouse(type: TuiMouseEvent["type"], x: number, y: number): TuiMouseEvent {
+	return { ...click(x, y), type, button: type === "move" ? "none" : "left" };
+}
+
+test("the wheel over the option column scrolls the options, not the code", () => {
+	const long = normalize({
+		questions: [
+			{
+				id: "q",
+				question: "Which?",
+				context: Array.from({ length: 40 }, (_, i) => `context line ${i}`).join("\n"),
+				options: [{ label: "a", preview: code }, { label: "b" }],
+			},
+		],
+	});
+	const form = new AskForm(tui, theme, long, () => {});
+	form.focused = true;
+	let lines = form.render(160);
+	assert.match(lines[1], /^context line 23/, "the window opens on the highlighted option, with the question above it off screen");
+	form.handleMouse({ ...wheel(-2), x: 10 });
+	lines = form.render(160);
+	assert.match(lines.join("\n"), /lines 1–/, "the code stayed at its top");
+	assert.match(lines[1], /^context line 21/, "the option column moved up two lines");
+	form.handleMouse({ ...wheel(2), x: 10 });
+	assert.match(form.render(160)[1], /^context line 23/, "and wheels back");
+	form.handleMouse({ ...wheel(2), x: 120 });
+	lines = form.render(160);
+	assert.match(lines[1], /^context line 23/, "a wheel over the code leaves the options alone");
+	assert.match(lines.join("\n"), /lines 3–/, "and scrolls the code");
+});
+
+test("clicks and hovers in the code column reach no option row", () => {
+	const { form } = mount(accented);
+	let lines = form.render(160);
+	const redux = lineOf(lines, /2\. Redux/);
+	form.handleMouse(mouse("move", 120, redux));
+	lines = form.render(160);
+	assert.match(lines[redux], /^  2\. Redux/, "no hover mark from the code column");
+	form.handleMouse(mouse("click", 120, redux));
+	assert.match(form.render(160).join("\n"), /Which store\?/, "the click chose nothing");
+});
+
+test("dragging over the code column highlights only that column and copies the covered code on release", () => {
+	const { form } = mount();
+	let lines = form.render(160);
+	const header = lineOf(lines, /lines 1–/);
+	const codeX = lines[header + 1].indexOf("const line0");
+	assert.ok(codeX > 80, "the code sits in the right column");
+	assert.deepEqual(form.handleMouse(mouse("press", codeX, header + 1)), { capture: true, focus: true });
+	assert.deepEqual(form.handleMouse(mouse("drag", codeX + 10, header + 2)), { handled: true, render: true });
+	lines = form.render(160);
+	assert.match(lines[header + 1], /^.{80}.{3}\[const line0 = x+/, "the first line is inverse from the press on");
+	assert.match(lines[header + 2], /^.{80}.{3}\[const line1\]/, "the second line is inverse from its start through the pointer");
+	assert.doesNotMatch(lines[header + 1].slice(0, 80), /\[/, "the option column is untouched");
+	form.handleMouse(mouse("release", codeX + 10, header + 2));
+	assert.equal(lastCopy(), `const line0 = ${"x".repeat(100)};\nconst line1`);
+	lines = form.render(160);
+	assert.match(lines[header + 1], /\[const line0/, "the highlight stays after the release, to rest the eyes on");
+	assert.match(lines[header], /copied/, "the header reports the copy");
+	assert.deepEqual(form.handleMouse(mouse("press", 120, header)), { handled: true, render: true }, "a press anywhere clears it");
+	assert.doesNotMatch(form.render(160)[header + 1], /\[/);
+});
+
+test("dragging over the option column highlights and copies only that column, and a still press copies nothing", () => {
+	const { form } = mount();
+	let lines = form.render(160);
+	const context = lineOf(lines, /^Some context\./);
+	assert.deepEqual(form.handleMouse(mouse("press", 5, context)), { capture: true, focus: true });
+	form.handleMouse(mouse("drag", 2, context + 2));
+	lines = form.render(160);
+	assert.match(lines[context], /^Some \[context\.\s+/, "the context line is inverse from the press to the column's end");
+	assert.match(lines[context + 2], /^\[❯ 1\]\. Zustand/, "the option line is inverse through the pointer");
+	assert.doesNotMatch(lines[context].slice(82), /\[/, "the code column is untouched");
+	written.length = 0;
+	form.handleMouse(mouse("release", 2, context + 2));
+	assert.equal(lastCopy(), "context.\n\n❯ 1");
+	assert.match(form.render(160)[context], /\[/, "the highlight stays after the release");
+	press(form, "down");
+	assert.doesNotMatch(form.render(160)[context], /\[/, "a key clears it");
+	written.length = 0;
+	form.handleMouse(mouse("press", 5, context));
+	form.handleMouse(mouse("release", 5, context));
+	assert.equal(written.length, 0, "a press without a drag copies nothing, leaving the click to pi");
+	assert.doesNotMatch(form.render(160)[context], /\[/, "and leaves no highlight");
+});
+
+test("a press on the code header, the rule, or without a code column is not a selection", () => {
+	const { form } = mount();
+	const lines = form.render(160);
+	const header = lineOf(lines, /lines 1–/);
+	assert.equal(form.handleMouse(mouse("press", 81, header + 1)), undefined, "the gutter is neither column");
+	assert.equal(form.handleMouse(mouse("press", 120, header)), undefined, "the header is not code");
+	press(form, "2");
+	form.render(160);
+	assert.equal(form.handleMouse(mouse("press", 120, header + 1)), undefined, "no code column, no selection");
+});
+
+test("ctrl+b copies the highlighted option's whole code block", () => {
+	const { form } = mount();
+	form.render(160);
+	written.length = 0;
+	press(form, "down", "ctrl+b");
+	assert.equal(written.length, 0, "an option without code copies nothing");
+	press(form, "up", "ctrl+b");
+	const copied = lastCopy().split("\n");
+	assert.equal(copied.length, 25);
+	assert.equal(copied[0], `const line0 = ${"x".repeat(100)};`);
+	assert.match(form.render(160).join("\n"), /copied/);
 });

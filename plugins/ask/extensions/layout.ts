@@ -28,7 +28,7 @@ export type Row =
 			kind: "option";
 			index: number;
 			label: string;
-			tradeoff?: string;
+			detail?: string;
 			reason?: string;
 			highlighted: boolean;
 			checked: boolean;
@@ -99,14 +99,32 @@ const RESERVED_BELOW = 2;
 /** The rules painted above and below the form. */
 const RULE_LINES = 2;
 
-/** Lines each scroll key moves the scrolled column by, and in which direction; `page` means one window. */
-const SCROLL_KEYS: Partial<Record<KeyName, { axis: "lines" | "columns"; direction: -1 | 1; page: boolean }>> = {
-	pageUp: { axis: "lines", direction: -1, page: true },
-	pageDown: { axis: "lines", direction: 1, page: true },
-	"shift+up": { axis: "lines", direction: -1, page: false },
-	"shift+down": { axis: "lines", direction: 1, page: false },
-	"shift+left": { axis: "columns", direction: -1, page: false },
-	"shift+right": { axis: "columns", direction: 1, page: false },
+/** Which column a vertical scroll moves. */
+export type ScrollTarget = "options" | "code";
+
+interface ScrollKey {
+	axis: "lines" | "columns";
+	direction: -1 | 1;
+	/** Move one window rather than one line. */
+	page: boolean;
+	/** The column the key moves beside a preview column; without one every vertical key moves the options. */
+	target: ScrollTarget;
+}
+
+/**
+ * What each scroll key moves. PgUp/PgDn page the options, but pi's fullscreen
+ * mode takes them for the transcript, so alt+up/down are the keys the hint
+ * names; shift+arrows move and pan the code.
+ */
+const SCROLL_KEYS: Partial<Record<KeyName, ScrollKey>> = {
+	pageUp: { axis: "lines", direction: -1, page: true, target: "options" },
+	pageDown: { axis: "lines", direction: 1, page: true, target: "options" },
+	"alt+up": { axis: "lines", direction: -1, page: false, target: "options" },
+	"alt+down": { axis: "lines", direction: 1, page: false, target: "options" },
+	"shift+up": { axis: "lines", direction: -1, page: false, target: "code" },
+	"shift+down": { axis: "lines", direction: 1, page: false, target: "code" },
+	"shift+left": { axis: "columns", direction: -1, page: false, target: "code" },
+	"shift+right": { axis: "columns", direction: 1, page: false, target: "code" },
 };
 /** Characters one horizontal pan of the code column moves, about one indent level of most code. */
 const PAN_STEP = 8;
@@ -165,7 +183,7 @@ function optionRow(state: FormState, question: AskQuestion, option: AskOption, i
 		kind: "option",
 		index,
 		label: option.label,
-		tradeoff: option.tradeoff,
+		detail: option.detail,
 		reason: option.recommended || undefined,
 		highlighted: index === state.cursor,
 		checked: state.checked.get(question.id)?.has(index) ?? false,
@@ -268,7 +286,7 @@ function listHint(state: FormState, previewColumn: boolean): string {
 	const parts = [question.multi ? "number/space toggle" : "number/enter choose", "type to answer"];
 	if (isBatch(state)) parts.push("tab question");
 	parts.push(`${CHORDS.note} note`, `${CHORDS.clarify} clarify`);
-	if (previewColumn) parts.push("shift+arrows scroll code");
+	if (previewColumn) parts.push("alt+arrows scroll options", "shift+arrows scroll code", `${CHORDS.copy} copy code`);
 	parts.push(CANCEL_HINT);
 	return parts.join(HINT_SEPARATOR);
 }
@@ -433,13 +451,15 @@ export function isScrollKey(key: KeyName): boolean {
 }
 
 /**
- * Return the offsets after a scroll key: PgUp/PgDn move a window, shift+up and
- * shift+down move one line, shift+left and shift+right pan the preview column
- * sideways. Vertical keys scroll the preview column when the layout has one,
- * else the option window; panning needs a preview column. The next layout
- * clamps them. Any other key leaves the offsets as they are.
+ * Return the offsets after a scroll key: PgUp/PgDn move a window, alt+up/down
+ * and shift+up/down move one line, shift+left and shift+right pan the preview
+ * column sideways. Beside a preview column each key moves its own column;
+ * `target` overrides that, for the wheel over one column. Without a preview
+ * column every vertical key moves the option window, and panning does
+ * nothing. The next layout clamps the offsets. Any other key leaves them as
+ * they are.
  */
-export function scrolledOffsets(view: Layout, key: KeyName): Offsets {
+export function scrolledOffsets(view: Layout, key: KeyName, target?: ScrollTarget): Offsets {
 	const scroll = SCROLL_KEYS[key];
 	const current: Offsets = { window: view.windowOffset, preview: view.preview };
 	if (!scroll) return current;
@@ -449,6 +469,7 @@ export function scrolledOffsets(view: Layout, key: KeyName): Offsets {
 		return { ...current, preview: { ...view.preview, column } };
 	}
 	const lines = scroll.direction * (scroll.page ? view.budget : 1);
-	if (!view.preview) return { window: Math.max(0, view.windowOffset + lines) };
+	const column = target ?? scroll.target;
+	if (!view.preview || column === "options") return { ...current, window: Math.max(0, view.windowOffset + lines) };
 	return { ...current, preview: { ...view.preview, offset: Math.max(0, view.preview.offset + lines) } };
 }

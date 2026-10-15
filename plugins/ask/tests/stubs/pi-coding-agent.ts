@@ -9,6 +9,7 @@ export interface Theme {
 	bg(color: string, text: string): string;
 	bold(text: string): string;
 	underline(text: string): string;
+	inverse(text: string): string;
 }
 
 export function getMarkdownTheme(): Record<string, unknown> {

@@ -19,8 +19,11 @@ export type KeyName =
 	| "shift+down"
 	| "shift+left"
 	| "shift+right"
+	| "alt+up"
+	| "alt+down"
 	| "note"
 	| "clarify"
+	| "copy"
 	| "cancel"
 	| "printable";
 
@@ -28,15 +31,19 @@ export type KeyName =
 export const CHORDS = {
 	note: "ctrl+n",
 	clarify: "ctrl+k",
+	/** Copies the highlighted option's code block; the view handles it, it never reaches the form state. */
+	copy: "ctrl+b",
 	cancel: "ctrl+c",
 } as const;
 
 /** Plain-navigation keys mapped to the pi KeyId that produces them, modified keys before their plain ones. */
-export const NAV_KEYS: Record<Exclude<KeyName, "note" | "clarify" | "cancel" | "printable">, string> = {
+export const NAV_KEYS: Record<Exclude<KeyName, "note" | "clarify" | "copy" | "cancel" | "printable">, string> = {
 	"shift+up": "shift+up",
 	"shift+down": "shift+down",
 	"shift+left": "shift+left",
 	"shift+right": "shift+right",
+	"alt+up": "alt+up",
+	"alt+down": "alt+down",
 	up: "up",
 	down: "down",
 	left: "left",
