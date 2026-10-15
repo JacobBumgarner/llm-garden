@@ -67,7 +67,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
 
-		class SessionTitleEditor extends CustomEditor {
+		class EditorBorder extends CustomEditor {
 			constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) {
 				super(tui, theme, keybindings, { embedWorkingStatus: true });
 				this.appKeybindings = keybindings;
@@ -112,6 +112,6 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		ctx.ui.setEditorComponent((tui, theme, keybindings) => new SessionTitleEditor(tui, theme, keybindings));
+		ctx.ui.setEditorComponent((tui, theme, keybindings) => new EditorBorder(tui, theme, keybindings));
 	});
 }

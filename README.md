@@ -21,7 +21,7 @@ Extensions I've created to enhance `pi` to my workflow preferences.
 | `ask` | A tool to let the agent ask the user questions in a structured manner. Includes multi-select, code previews, and open input. |
 | `subagent` | A tool for subagent deployment by the main agent. Subagents can run in the foreground or background and can be paused, resumed, and steered. `/subagents` (or `Option+a`) shows an overlay of subagents. |
 | `rename` | Renames the session based on conversation context, a supplied sentence, or a supplied hyphenated name. |
-| `session-title` | Adds the session title and a running-subagent badge to the editor top border. |
+| `editor-border` | Paints the session title and a running-subagent badge on the editor top border. |
 | `stash` | `ctrl+s` stashes the editor text so you can send a new message, change settings, etc. |
 | `focus-mode` | Collapses tool calls in the transcript into one-line summaries. Allows for easier viewing of summarized agent activity. |
 | `footer` | My custom footer for pi. |
