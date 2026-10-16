@@ -23,10 +23,9 @@
 // One graph column is BUCKET seconds.
 
 const BUCKET = 15; // seconds per graph column (two columns per braille cell)
-const ROW_CELLS = 20; // per-workspace sparkline width in braille cells (2 columns each); tune to the sidebar so it fits without overflowing
+const ROW_CELLS = 18; // per-workspace sparkline width in braille cells (2 columns each); tune to the sidebar so it fits without overflowing
 const TOP_CELLS = 28; // header graph: 56 columns = 14 minutes
 const KEEP = Math.max(TOP_CELLS, ROW_CELLS) * 2; // buckets of history kept per workspace
-const METER = 6; // progress meter cells
 const MAX_ROWS = 40;
 
 // Theme tokens only (system colors adapt to light and dark).
@@ -101,6 +100,27 @@ let lastSampled = -1;
 
 const list = (v) => (Array.isArray(v) ? v : []);
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+// Repo label, matching the footer: basename of the workspace's directory with
+// the `lrl-xai-` prefix stripped. Empty when the directory is unknown.
+const REPO_PREFIX = /^lrl-xai-/;
+const dirBaseOf = (w) => {
+  const dir = (w && (w.current_directory || w.directory || w.cwd)) || "";
+  return dir ? String(dir).replace(/\/+$/, "").split("/").pop() || "" : "";
+};
+const repoName = (w) => dirBaseOf(w).replace(REPO_PREFIX, "");
+// cmux composes the title as `<glyph> - <chat> - <repo-basename>`. The repo is
+// shown on its own line below, so the row title is just the chat part.
+const cleanTitle = (w) => {
+  let t = (w && w.title) || "untitled";
+  t = t.replace(/^π\s*-\s*/, "");
+  const base = dirBaseOf(w);
+  if (base) {
+    const suf = " - " + base;
+    if (t.endsWith(suf)) t = t.slice(0, -suf.length);
+  }
+  return t;
+};
 
 // A workspace progress bar means delegated work is in flight even when the
 // hosting agent's own lifecycle is idle.
@@ -224,7 +244,6 @@ function rowModel(w, now) {
   // turn reads `idle`, not `input`.
   const attention = unread > 0 && !w.selected;
   const progress = hasProgress(w) ? Math.max(0, Math.min(1, w.progress.value)) : null;
-  const progressLabel = progress !== null && typeof w.progress.label === "string" ? w.progress.label.trim() : "";
   // Delegated work in flight keeps the row running even while the hosting
   // agent's own lifecycle sits idle between turns.
   const state = progress !== null ? "working"
@@ -242,7 +261,7 @@ function rowModel(w, now) {
   );
   return {
     id: w.id,
-    title: w.title || "untitled",
+    title: cleanTitle(w),
     selected: !!w.selected,
     tint: w.color || null,
     state,
@@ -256,13 +275,13 @@ function rowModel(w, now) {
     prColor: pr ? PR_COLOR[pr.status] ?? "secondary" : "secondary",
     prURL: pr ? pr.url || "" : "",
     layers: brailleLayers(levels, 1)[0],
-    meterOn: progress === null ? "" : "■".repeat(Math.round(progress * METER)),
-    meterOff: progress === null ? "" : "■".repeat(METER - Math.round(progress * METER)),
-    meterText: progress === null ? "" : progressLabel || Math.round(progress * 100) + "%",
-    status: progress === null && state !== "none" ? STATE[state].word + " " + age : "",
+    statusWord: STATE[state].word,
+    statusAge: state !== "none" && age ? " " + age : "",
+    delegated: progress !== null,
     busy: running > 0 || attention,
     running,
-    group: w.group ?? null,
+    repo: repoName(w),
+    branch: typeof w.branch === "string" ? w.branch : "",
     pinned: !!w.pinned,
   };
 }
@@ -322,7 +341,6 @@ function handleRowClick(id, payload) {
     }
   } else {
     clearMultiSelect();
-    setLitGroup(null);
     cmux("workspace.select", { workspace_id: id });
   }
   lastClickedId = id;
@@ -385,118 +403,23 @@ const snapshot = computed(() => {
   };
 });
 
-// ---------------------------------------------------------------------------
-// Groups. Collapse is applied optimistically so the chevron answers at once.
-const collapseOverride = new Map();
-const [collapseTick, setCollapseTick] = signal(0);
-
-function isCollapsed(g) {
-  collapseTick();
-  if (collapseOverride.has(g.id)) {
-    const v = collapseOverride.get(g.id);
-    if (v === g.collapsed) collapseOverride.delete(g.id); // host caught up
-    else return v;
-  }
-  return !!g.collapsed;
-}
-
-function toggleCollapse(g) {
-  const next = !isCollapsed(g);
-  collapseOverride.set(g.id, next);
-  setCollapseTick(collapseTick() + 1);
-  cmux(next ? "workspace.group.collapse" : "workspace.group.expand", { group_id: g.id });
-}
-
-const groupById = (id) => list(data.groups()).find((g) => g.id === id);
-
-// Group being renamed inline (header swaps for a text field), or null.
-const [editingGroup, setEditingGroup] = signal(null);
-// cmux() returns nothing, so a freshly created group is found by diffing the
-// group ids known before the create; it then opens straight into rename.
-let pendingRename = null; // Set of group ids before the create, or null
-let autoEditGroup = null;
-const [editTick, setEditTick] = signal(0);
-
-function beginRename(id) { autoEditGroup = null; setEditingGroup(id); }
-function endRename() { autoEditGroup = null; setEditingGroup(null); setEditTick(editTick() + 1); }
-
-function createGroup(ids) {
-  pendingRename = new Set(list(data.groups()).map((g) => g.id));
-  cmux("workspace.group.create", { name: "New Group", child_workspace_ids: JSON.stringify(ids) });
-}
-
-// One flat list of entries for the Reorderable: group headers (fixed) and
-// workspace rows. A group sits at its anchor's position (falling back to its
-// first visible member) and, unlike the built-in sidebar, the anchor keeps
-// its own activity row under the header. Pinned rows and groups cluster at
-// the top. In BUSY mode a group appears when any member survived the filter.
+// One flat list of entries for the Reorderable: a workspace row each. Pinned
+// rows cluster at the top.
 const flatEntries = computed(() => {
   const rows = snapshot().rows;
-  const groups = new Map(list(data.groups()).map((g) => [g.id, g]));
-  const byGroup = new Map();
-  for (const r of rows) {
-    if (r.group && groups.has(r.group)) {
-      if (!byGroup.has(r.group)) byGroup.set(r.group, []);
-      byGroup.get(r.group).push(r);
-    }
-  }
-  editTick();
-  if (pendingRename) {
-    const fresh = list(data.groups()).find((g) => !pendingRename.has(g.id));
-    if (fresh) { autoEditGroup = fresh.id; pendingRename = null; }
-  }
-  const editing = editingGroup() ?? autoEditGroup;
-  const section = (g) => {
-    const members = byGroup.get(g.id) ?? [];
-    // The key changes while editing so the Reorderable rebuilds the header.
-    const out = [{
-      kind: "header",
-      id: "h:" + g.id + (editing === g.id ? ":edit" : ""),
-      groupId: g.id,
-      editing: editing === g.id,
-    }];
-    if (!isCollapsed(g)) for (const m of members) out.push({ kind: "ws", id: m.id, groupId: g.id });
-    return out;
-  };
   const pinned = [];
   const rest = [];
-  const seen = new Set();
-  for (const r of rows) {
-    if (r.group && groups.has(r.group)) {
-      const g = groups.get(r.group);
-      const members = byGroup.get(g.id);
-      const isAnchor = r.id === g.anchorId || !members.some((m) => m.id === g.anchorId);
-      if (seen.has(g.id) || !isAnchor) continue;
-      seen.add(g.id);
-      (g.pinned ? pinned : rest).push(...section(g));
-    } else {
-      (r.pinned ? pinned : rest).push({ kind: "ws", id: r.id, groupId: null });
-    }
-  }
-  const all = [...pinned, ...rest];
-  // Breathing room at group boundaries: above each header and above the
-  // first ungrouped row that follows a group.
-  for (let i = 1; i < all.length; i += 1) {
-    const e = all[i];
-    const prev = all[i - 1];
-    e.gapAbove = e.kind === "header" || (prev.groupId !== null && e.groupId === null);
-  }
-  return all;
+  for (const r of rows) (r.pinned ? pinned : rest).push({ kind: "ws", id: r.id });
+  return [...pinned, ...rest];
 });
-
-// Group whose header was clicked last: its member rows get a faint wash
-// until a workspace row is plainly clicked.
-const [litGroup, setLitGroup] = signal(null);
-const GROUP_GAP = 8;
 
 const shown = computed(() => snapshot().rows);
 const rowsById = computed(() => new Map(snapshot().rows.map((r) => [r.id, r])));
-const visibleRowIds = () => flatEntries().filter((e) => e.kind === "ws").map((e) => e.id);
+const visibleRowIds = () => flatEntries().map((e) => e.id);
 
-// Drop resolution over the flat list (headers included). The container is
-// taken from the staying neighbor above, or below when `extra.side` says the
-// pointer leaned that way at a group boundary. Group headers are fixed, so
-// only workspace rows move; a multi-selection moves as one contiguous block.
+// Drop resolution over the flat list. A multi-selection moves as one
+// contiguous block; the dropped rows land before the staying neighbor below
+// the drop point.
 function move(id, index, extra) {
   multiTick();
   const bulk = multiSelected.has(id) && multiSelected.size > 1;
@@ -504,43 +427,17 @@ function move(id, index, extra) {
     ? visibleRowIds().filter((rid) => multiSelected.has(rid) || rid === id)
     : [id];
   const moving = new Set(movingIds);
-  const stays = (e) => !(e.kind === "ws" && moving.has(e.id));
   const entries = flatEntries().filter((e) => e.id !== id);
 
-  let prev = null;
-  for (let i = index - 1; i >= 0; i -= 1) {
-    if (stays(entries[i])) { prev = entries[i]; break; }
-  }
-  const nextAny = entries.slice(index).find(stays) ?? null;
-  const nextRow = entries.slice(index).find((e) => {
-    if (e.kind === "header") return !moving.has(groupById(e.groupId)?.anchorId);
-    return stays(e);
-  });
-  const nextRefId = nextRow
-    ? (nextRow.kind === "header" ? groupById(nextRow.groupId)?.anchorId : nextRow.id)
-    : null;
-
-  let container;
-  if (extra && extra.side === "below") {
-    container = nextAny && nextAny.kind === "ws" ? nextAny.groupId : null;
-  } else {
-    container = prev ? prev.groupId : null;
-    if (prev && prev.kind === "header") {
-      const g = groupById(prev.groupId);
-      const dragged = rowsById().get(id);
-      if (g && isCollapsed(g) && dragged?.group !== g.id) container = null;
-    }
+  // The staying row below the drop point anchors the new position. When the
+  // pointer leaned below at a boundary, use that neighbor instead.
+  const staying = entries.filter((e) => !moving.has(e.id));
+  let nextRefId = staying[index]?.id ?? null;
+  if (extra && extra.side === "below" && index > 0) {
+    nextRefId = staying[index - 1]?.id ?? nextRefId;
   }
 
-  const all = list(data.workspaces());
-  for (const rid of movingIds) {
-    const w = all.find((x) => x.id === rid);
-    if (!w || (w.group ?? null) === container) continue;
-    if (container) cmux("workspace.group.add", { group_id: container, workspace_id: rid });
-    else cmux("workspace.group.remove", { workspace_id: rid });
-  }
-
-  const allIds = all.map((w) => w.id);
+  const allIds = list(data.workspaces()).map((w) => w.id);
   const rest = allIds.filter((x) => !moving.has(x));
   let insertAt = nextRefId ? rest.indexOf(nextRefId) : rest.length;
   if (insertAt < 0) insertAt = rest.length;
@@ -597,89 +494,8 @@ function chip(label, active, onTap) {
     .onTap(onTap);
 }
 
-function groupHeader(groupId, e) {
-  const g = () => groupById(groupId) ?? { id: groupId, name: "", collapsed: false, pinned: false };
-  const members = () => shown().filter((r) => r.group === groupId);
-  const running = () => members().reduce((n, r) => n + r.running, 0);
-  const waiting = () => members().filter((r) => r.attention).length;
-  const anchorSelected = () => members().some((r) => r.selected && r.id === g().anchorId);
-  return HStack({ spacing: 5 }, [
-    Image("chevron.right")
-      .font(10).weight("semibold").color("tertiary")
-      .rotation(() => (isCollapsed(g()) ? 0 : 90))
-      .frame({ width: 14, height: 16 })
-      .onTap(() => toggleCollapse(g())),
-    Text(() => g().name || "group").font(12).weight("semibold")
-      .color(() => (g().customColor ? g().customColor : anchorSelected() ? "primary" : "secondary"))
-      .lineLimit(1).truncation("tail"),
-    Text(() => members().length + "").font(11).monospaced().color("quaternary"),
-    Spacer({ minLength: 0 }),
-    Text(() => (running() ? SPINNER[snapshot().now % SPINNER.length] + " " + running() : ""))
-      .font(11).monospaced().color(STATE.working.color),
-    Text(() => (waiting() ? STATE.needs_input.glyph + " " + waiting() : ""))
-      .font(11).monospaced().color(STATE.needs_input.color),
-  ])
-    .paddingLeading(6).paddingTrailing(8).paddingVertical(4)
-    .cornerRadius(6)
-    .background(() => (anchorSelected() || litGroup() === groupId ? "#7f7f7f1f" : "clear"))
-    .hoverBackground("#7f7f7f1c")
-    .frame({ maxWidth: "infinity" })
-    .paddingTop(() => (e().gapAbove ? GROUP_GAP : 0))
-    .fixed()
-    .block("h:" + groupId)
-    .onTap(() => {
-      setLitGroup(groupId);
-      if (g().anchorId) cmux("workspace.select", { workspace_id: g().anchorId });
-    })
-    .onDoubleTap(() => beginRename(groupId))
-    .contextMenu([
-      Button("Rename Group", () => beginRename(groupId)),
-      Button(() => (isCollapsed(g()) ? "Expand" : "Collapse"), () => toggleCollapse(g())),
-      Button(() => (g().pinned ? "Unpin Group" : "Pin Group"), () =>
-        cmux(g().pinned ? "workspace.group.unpin" : "workspace.group.pin", { group_id: groupId })),
-      Button("Mark All Read", () => {
-        for (const r of members()) cmux("workspace.action", { workspace_id: r.id, action: "mark_read" });
-      }),
-      Divider(),
-      // Dissolves the group and keeps every chat. There is deliberately no
-      // "Delete Group": that would close every workspace in the group.
-      Button("Ungroup", () => cmux("workspace.group.ungroup", { group_id: groupId })),
-    ]);
-}
-
-// Same geometry as groupHeader so entering rename only makes the text editable.
-function groupEditRow(groupId, e) {
-  const g = () => groupById(groupId) ?? { id: groupId, name: "", collapsed: false };
-  return HStack({ spacing: 5 }, [
-    Image("chevron.right")
-      .font(10).weight("semibold").color("tertiary")
-      .rotation(() => (isCollapsed(g()) ? 0 : 90))
-      .frame({ width: 14, height: 16 }),
-    TextField(() => g().name ?? "", {
-      placeholder: "Group name",
-      onSubmit: (t) => {
-        const name = (t ?? "").trim();
-        if (name) cmux("workspace.group.rename", { group_id: groupId, name });
-        endRename();
-      },
-      onCancel: endRename,
-    }).font(12).weight("semibold"),
-  ])
-    .paddingLeading(6).paddingTrailing(8).paddingVertical(4)
-    .cornerRadius(6)
-    .background("#7f7f7f1f")
-    .frame({ maxWidth: "infinity" })
-    .paddingTop(() => (e().gapAbove ? GROUP_GAP : 0))
-    .fixed();
-}
-
 function row(r, entry, e) {
   const color = () => (r().attention ? STATE.needs_input.color : STATE[r().state].color);
-  const groupItems = list(data.groups())
-    .map((g) => Button(g.name || "group", () => {
-      for (const id of bulkIds(r().id)) cmux("workspace.group.add", { group_id: g.id, workspace_id: id });
-      clearMultiSelect();
-    }));
   return HStack({ spacing: 5 }, [
     RoundedRectangle({ width: 3, height: 34, cornerRadius: 1.5 })
       .fill(() => (r().attention ? STATE.needs_input.color
@@ -700,28 +516,38 @@ function row(r, entry, e) {
           .onTap(() => { if (r().prURL) openURL(r().prURL); }),
       ]),
       HStack({ spacing: 6 }, [
-        Text(() => r().meterText || r().status).font(11).monospaced()
-          .color(() => (r().meterText ? "secondary" : r().attention ? STATE.needs_input.color : "tertiary"))
-          .lineLimit(1).frame({ width: 64, alignment: "leading" }),
-        graphLine(() => r().layers, ROW_HEAT, 10, true),
+        // Text frames center their content, so a Spacer pins the status left.
         HStack({ spacing: 0 }, [
-          Text(() => r().meterOn).font(10).monospaced().color("accent"),
-          Text(() => r().meterOff).font(10).monospaced().color("quaternary"),
-        ]),
-      ]).paddingLeading(4),
+          // `run` takes the spinner's color; other words and the age stay dim.
+          Text(() => r().statusWord).font(11).monospaced()
+            .color(() => (r().working ? color() : r().attention ? STATE.needs_input.color : "tertiary"))
+            .lineLimit(1),
+          Text(() => r().statusAge).font(11).monospaced()
+            .color(() => (r().attention ? STATE.needs_input.color : "tertiary"))
+            .lineLimit(1),
+          Spacer({ minLength: 0 }),
+        ]).frame({ width: 64 }),
+        graphLine(() => r().layers, ROW_HEAT, 10, true),
+        // A λ marks background delegated work in flight (subagents running while
+        // the hosting agent's own lifecycle sits idle). No bar, no count.
+        Text(() => (r().delegated ? "λ" : "")).font(11).monospaced().color("secondary"),
+      ]).frame({ maxWidth: "infinity", alignment: "leading" }).paddingLeading(4),
+      // Repo (purple) on the left, git branch on the right, beneath the status line.
+      HStack({ spacing: 6 }, [
+        Text(() => r().repo).font(11).monospaced().color("#A798D7")
+          .lineLimit(1).truncation("tail").layoutPriority(1),
+        Spacer({ minLength: 0 }),
+        Text(() => r().branch).font(10).monospaced().color("tertiary")
+          .lineLimit(1).truncation("tail"),
+      ]).frame({ maxWidth: "infinity" }).paddingLeading(4).paddingTrailing(2),
     ]).frame({ maxWidth: "infinity" }),
   ])
     .paddingHorizontal(2).paddingVertical(5)
     .cornerRadius(6)
     .background(() => (isMultiSelected(r().id) ? "#4C9EEB33"
-      : r().selected ? "#7f7f7f1f"
-      : r().group && litGroup() === r().group ? "#7f7f7f10"
-      : "clear"))
+      : r().selected ? "#7f7f7f1f" : "clear"))
     .hoverBackground(() => (isMultiSelected(r().id) ? "#4C9EEB33" : "#7f7f7f26"))
     .frame({ maxWidth: "infinity" })
-    .paddingTop(() => (e().gapAbove ? GROUP_GAP : 0))
-    .marginLeading(() => (entry.groupId ? 4 : 0))
-    .block(() => (entry.groupId ? "h:" + entry.groupId : null))
     .dragSet(() => (isMultiSelected(r().id) ? "multi" : null))
     .onTap((payload) => handleRowClick(r().id, payload))
     .contextMenu([
@@ -732,19 +558,6 @@ function row(r, entry, e) {
         return n > 1 ? "Mark " + n + " Read" : "Mark Read";
       }, () => {
         for (const id of bulkIds(r().id)) cmux("workspace.action", { workspace_id: id, action: "mark_read" });
-        clearMultiSelect();
-      }),
-      Divider(),
-      Button(() => {
-        const n = bulkIds(r().id).length;
-        return n > 1 ? "New Group from " + n + " Workspaces" : "New Group with This";
-      }, () => {
-        createGroup(bulkIds(r().id));
-        clearMultiSelect();
-      }),
-      Menu("Move to Group", groupItems),
-      Button("Remove from Group", () => {
-        for (const id of bulkIds(r().id)) cmux("workspace.group.remove", { workspace_id: id });
         clearMultiSelect();
       }),
       Divider(),
@@ -770,10 +583,7 @@ sidebar(() =>
     ]).paddingHorizontal(8),
     Divider(),
     Reorderable({ items: flatEntries, key: (e) => e.id, onMove: move, spacing: 1 }, (e) => {
-      const entry = e(); // kind and ids are stable per key
-      if (entry.kind === "header") {
-        return entry.editing ? groupEditRow(entry.groupId, e) : groupHeader(entry.groupId, e);
-      }
+      const entry = e();
       let last = rowsById().get(entry.id);
       const r = () => (last = rowsById().get(entry.id) ?? last);
       return row(r, entry, e);
