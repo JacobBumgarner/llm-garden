@@ -8,6 +8,7 @@ import { formatAnswersMessage, PAUSE_NOTICE } from "../../ask/extensions/pause.t
 import type { AgentConfig } from "../extensions/agents.ts";
 import { COALESCE_MS, createCourier } from "../extensions/courier.ts";
 import {
+	createChildArgs,
 	DONE_IDLE_MS,
 	MAX_LIVE,
 	MAX_RUNNING,
@@ -740,4 +741,47 @@ test("close stops every child and drops every later event, settle, and timer", a
 	assert.equal(changes.length, seen);
 	await assert.rejects(registry.start(spec()), /closed/);
 	await assert.rejects(registry.wait(), /closed/);
+});
+
+test("a brief is resolved against the run's cwd, stored in meta, and read into the system prompt on each launch", async (t) => {
+	const { sessionDir, clients } = setup(t);
+	const briefDir = fs.mkdtempSync(path.join(os.tmpdir(), "brief-test-"));
+	t.after(() => fs.rmSync(briefDir, { recursive: true, force: true }));
+	fs.writeFileSync(path.join(briefDir, "critic.md"), "Ask hard questions.\n");
+	const prompts: string[] = [];
+	const registry = new RunRegistry({
+		sessionDir,
+		defaultCwd: briefDir,
+		findAgent: (name) => (name === AGENT.name ? AGENT : undefined),
+		childArgs: async (request) => {
+			const launch = await createChildArgs(sessionDir)(request);
+			prompts.push(fs.readFileSync(launch.args[launch.args.indexOf("--append-system-prompt") + 1], "utf-8"));
+			return launch;
+		},
+		createClient: ({ args, cwd }) => {
+			const client = new FakeClient(args, cwd);
+			clients.push(client);
+			return client;
+		},
+	});
+	t.after(() => registry.close());
+
+	const run = await registry.start({ label: "Grill it", agent: AGENT, task: "plan.md", agentScope: "user", brief: "critic.md", background: true });
+	assert.equal(readMeta(sessionDir, run.id)?.brief, path.join(briefDir, "critic.md"));
+	assert.match(prompts[0], /^Do the work\.\n\nAsk hard questions\.\n\n/);
+
+	fs.writeFileSync(path.join(briefDir, "critic.md"), "Ask harder questions.\n");
+	const first = clients.at(-1) as FakeClient;
+	first.turn(user("Task: plan.md"), reply("finished"));
+	first.exit(0);
+	await flush();
+	await registry.resume(run.id, { task: "again" });
+	assert.match(prompts[1], /Ask harder questions/);
+});
+
+test("a brief that does not exist fails the start before any child spawns", async (t) => {
+	const { registry, spec, clients } = setup(t);
+	await assert.rejects(registry.start(spec({ brief: "missing/brief.md" })), /Brief not found: \/work\/missing\/brief\.md/);
+	assert.equal(clients.length, 0);
+	assert.equal(registry.list().length, 0);
 });

@@ -19,7 +19,7 @@ Extensions I've created to enhance `pi` to my workflow preferences.
 | Extension | Details |
 | --- | --- |
 | `ask` | A tool to let the agent ask the user questions in a structured manner. Includes multi-select, code previews, and open input. |
-| `subagent` | A tool for subagent deployment by the main agent. Subagents can run in the foreground or background and can be paused, resumed, and steered. `/subagents` (or `Option+a`) shows an overlay of subagents. |
+| `subagent` | A tool for subagent deployment by the main agent. Subagents can run in the foreground or background and can be paused, resumed, and steered. A `brief` name on `start`, such as `orchestration/critic`, appends a bundled or user brief from `briefs/` to the delegate's system prompt, for standing instructions the task should not repeat. `/subagents` (or `Option+a`) shows an overlay of subagents. |
 | `rename` | Renames the session based on conversation context, a supplied sentence, or a supplied hyphenated name. |
 | `editor-border` | Paints the session title and a running-subagent badge on the editor top border. |
 | `stash` | `ctrl+s` stashes the editor text so you can send a new message, change settings, etc. |

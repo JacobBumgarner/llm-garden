@@ -230,3 +230,24 @@ test("resume rejects a background that is not a boolean", () => {
 		assert.match(error({ action: "resume", id: "sub-1", task: "next", background }), /background must be true or false/);
 	}
 });
+
+test("start applies brief to tasks that name none and keeps an entry's own", () => {
+	const request = ok({
+		action: "start",
+		tasks: [{ label: "A", agent: "a", task: "x" }, { label: "B", agent: "b", task: "y", brief: "own.md" }],
+		brief: " shared.md ",
+	});
+	assert.equal(request.action, "start");
+	if (request.action !== "start") return;
+	assert.deepEqual(
+		request.tasks.map((task) => task.brief),
+		["shared.md", "own.md"],
+	);
+	const plain = ok({ action: "start", label: "A", agent: "a", task: "x" });
+	assert.equal(plain.action === "start" ? plain.tasks[0].brief : "set", undefined);
+});
+
+test("start rejects a brief that is not a name", () => {
+	assert.match(error({ action: "start", label: "A", agent: "a", task: "x", brief: "" }), /brief must be the name/);
+	assert.match(error({ action: "start", label: "A", agent: "a", task: "x", brief: 3 }), /brief must be the name/);
+});

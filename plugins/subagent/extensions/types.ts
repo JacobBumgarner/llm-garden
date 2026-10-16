@@ -25,6 +25,8 @@ export interface SessionMeta {
 	agent: string;
 	task: string;
 	cwd?: string;
+	/** Absolute path of the brief appended to the system prompt, read again on every launch. */
+	brief?: string;
 	agentScope: AgentScope;
 	/** Questions recorded at the last pause, so answers can be matched to ids. Cleared when the run completes. */
 	questions?: AskQuestion[];

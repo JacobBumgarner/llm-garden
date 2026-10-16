@@ -7,6 +7,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
@@ -38,6 +39,8 @@ export interface RunSpec {
 	agent: AgentConfig;
 	task: string;
 	cwd?: string;
+	/** Path of the brief appended to the system prompt. The tool passes it absolute, from the brief's name. */
+	brief?: string;
 	agentScope: AgentScope;
 	background?: boolean;
 	notify?: "wake" | "quiet";
@@ -60,8 +63,32 @@ export type ChildArgsResolver = (request: {
 	agent: AgentConfig;
 	sessionId: string;
 	label: string;
+	/** Absolute path of the brief to append to the system prompt. */
+	brief?: string;
 	dispatch?: DispatchDefaults;
 }) => Promise<ChildLaunch>;
+
+/** Resolve a brief path against the run's cwd and confirm it is a readable file. Throws with the resolved path otherwise. */
+export function resolveBrief(brief: string, cwd: string): string {
+	const resolved = path.resolve(cwd, brief);
+	let stat: fs.Stats;
+	try {
+		stat = fs.statSync(resolved);
+	} catch {
+		throw new Error(`Brief not found: ${resolved}`);
+	}
+	if (!stat.isFile()) throw new Error(`Brief is not a file: ${resolved}`);
+	return resolved;
+}
+
+/** Read a brief for the system prompt. Throws with the path when it cannot be read. */
+function readBrief(brief: string): string {
+	try {
+		return fs.readFileSync(brief, "utf-8").trim();
+	} catch (err) {
+		throw new Error(`Could not read brief ${brief}: ${errorText(err)}`);
+	}
+}
 
 export type ClientFactory = (options: { args: string[]; cwd: string }) => RunClient;
 
@@ -84,6 +111,7 @@ interface Entry {
 	run: Run;
 	agent: AgentConfig;
 	agentScope: AgentScope;
+	brief?: string;
 	dispatch?: DispatchDefaults;
 	/** The prompt a queued run sends once it launches. */
 	pendingPrompt?: string;
@@ -103,11 +131,12 @@ interface PendingWait {
 	onAbort?: () => void;
 }
 
-/** Build child flags from an agent definition: model, thinking, tools, and a system prompt file with the subagent protocol. */
+/** Build child flags from an agent definition: model, thinking, tools, and a system prompt file holding the agent body, the brief when one is set, and the subagent protocol. */
 export function createChildArgs(sessionDir: string): ChildArgsResolver {
-	return async ({ agent, sessionId, label, dispatch }) => {
+	return async ({ agent, sessionId, label, brief, dispatch }) => {
 		const model = agent.model ?? dispatch?.model;
-		const systemPrompt = [agent.systemPrompt.trim(), SUBAGENT_PROTOCOL].filter(Boolean).join("\n\n");
+		const briefText = brief ? readBrief(brief) : "";
+		const systemPrompt = [agent.systemPrompt.trim(), briefText, SUBAGENT_PROTOCOL].filter(Boolean).join("\n\n");
 		const tmp = await writePromptToTempFile(agent.name, systemPrompt);
 		const args = buildChildArgs({
 			sessionDir,
@@ -203,7 +232,8 @@ export class RunRegistry {
 		this.assertOpen();
 		const id = newSessionId();
 		const prompt = `Task: ${spec.task}`;
-		const entry = this.createEntry(id, spec);
+		const brief = spec.brief ? resolveBrief(spec.brief, spec.cwd ?? this.defaultCwd) : undefined;
+		const entry = this.createEntry(id, { ...spec, brief });
 		const runNow = this.runningCount() < MAX_RUNNING;
 		const hasSlot = runNow ? this.makeLiveSlot() : this.canQueueLaunch();
 		if (!hasSlot) throw new Error(this.liveCapMessage());
@@ -216,6 +246,7 @@ export class RunRegistry {
 				agent: spec.agent.name,
 				task: spec.task,
 				cwd: spec.cwd,
+				brief,
 				agentScope: spec.agentScope,
 			});
 		} catch (err) {
@@ -451,6 +482,7 @@ export class RunRegistry {
 			},
 			agent: spec.agent,
 			agentScope: spec.agentScope,
+			brief: spec.brief,
 			dispatch: spec.dispatch,
 			reserved: false,
 			toolArgs: new Map(),
@@ -468,6 +500,7 @@ export class RunRegistry {
 			agent,
 			task: meta.task,
 			cwd: meta.cwd,
+			brief: meta.brief,
 			agentScope: meta.agentScope,
 		});
 		const questions: AskQuestion[] | undefined = meta.questions?.length ? meta.questions : undefined;
@@ -612,7 +645,13 @@ export class RunRegistry {
 	/** Create and attach the child for a reserved run. Returns undefined when the registry closed or the run was stopped while the flags were built. */
 	private async buildClient(entry: Entry): Promise<RunClient | undefined> {
 		const { run } = entry;
-		const launch = await this.childArgs({ agent: entry.agent, sessionId: run.id, label: run.label, dispatch: entry.dispatch });
+		const launch = await this.childArgs({
+			agent: entry.agent,
+			sessionId: run.id,
+			label: run.label,
+			brief: entry.brief,
+			dispatch: entry.dispatch,
+		});
 		if (this.closed || !entry.reserved) {
 			launch.dispose?.();
 			return undefined;

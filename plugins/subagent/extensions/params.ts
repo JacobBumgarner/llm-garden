@@ -15,6 +15,8 @@ export interface StartTask {
 	agent: string;
 	task: string;
 	cwd?: string;
+	/** Name of a brief appended to the agent's system prompt, such as `orchestration/critic`. */
+	brief?: string;
 }
 
 export type SubagentRequest =
@@ -38,7 +40,7 @@ export const MAX_LABEL_LENGTH = 80;
 export type ParseResult = { ok: true; request: SubagentRequest } | { ok: false; error: string };
 
 const FIELDS: Record<Action, readonly string[]> = {
-	start: ["label", "agent", "task", "tasks", "background", "notify", "cwd", "agentScope", "confirmProjectAgents"],
+	start: ["label", "agent", "task", "tasks", "background", "notify", "cwd", "brief", "agentScope", "confirmProjectAgents"],
 	status: [],
 	wait: ["ids", "timeout_s"],
 	send: ["id", "message", "mode"],
@@ -47,7 +49,7 @@ const FIELDS: Record<Action, readonly string[]> = {
 };
 
 const USAGE: Record<Action, string> = {
-	start: "label, agent and task, or tasks of label, agent and task (background, notify, cwd, agentScope, confirmProjectAgents optional)",
+	start: "label, agent and task, or tasks of label, agent and task (background, notify, cwd, brief, agentScope, confirmProjectAgents optional)",
 	status: "no other fields",
 	wait: "ids and timeout_s, both optional",
 	send: "id and message (mode optional)",
@@ -148,20 +150,33 @@ function missingFieldsText(missing: string[]): string {
 	return `${listFields(missing)}.${fix}`;
 }
 
-/** Build one start task from its fields, or return the names of the required fields it lacks. */
-function parseStartTask(fields: Record<string, unknown>, defaultCwd?: string): StartTask | { missing: string[] } {
-	const missing = ["label", "agent", "task"].filter((field) => !isText(fields[field]));
-	if (missing.length > 0) return { missing };
-	const cwd = typeof fields.cwd === "string" ? fields.cwd : defaultCwd;
-	return { label: cleanLabel(fields.label as string), agent: fields.agent as string, task: fields.task as string, ...(cwd ? { cwd } : {}) };
+/** The start options an entry inherits from the top level when it names none of its own. */
+interface TaskDefaults {
+	cwd?: string;
+	brief?: string;
 }
 
-/** Build the tasks of a start from the `tasks` list, or return the problem text. Entries without a cwd take the top-level one. */
-function parseTaskList(list: unknown, defaultCwd?: string): StartTask[] | string {
+/** Build one start task from its fields, or return the names of the required fields it lacks. */
+function parseStartTask(fields: Record<string, unknown>, defaults: TaskDefaults = {}): StartTask | { missing: string[] } {
+	const missing = ["label", "agent", "task"].filter((field) => !isText(fields[field]));
+	if (missing.length > 0) return { missing };
+	const cwd = typeof fields.cwd === "string" ? fields.cwd : defaults.cwd;
+	const brief = isText(fields.brief) ? fields.brief.trim() : defaults.brief;
+	return {
+		label: cleanLabel(fields.label as string),
+		agent: fields.agent as string,
+		task: fields.task as string,
+		...(cwd ? { cwd } : {}),
+		...(brief ? { brief } : {}),
+	};
+}
+
+/** Build the tasks of a start from the `tasks` list, or return the problem text. Entries without a cwd or brief take the top-level one. */
+function parseTaskList(list: unknown, defaults: TaskDefaults): StartTask[] | string {
 	if (!Array.isArray(list) || list.length === 0) return "tasks is empty.";
 	const tasks: StartTask[] = [];
 	for (const [index, item] of list.entries()) {
-		const task = parseStartTask((item ?? {}) as Record<string, unknown>, defaultCwd);
+		const task = parseStartTask((item ?? {}) as Record<string, unknown>, defaults);
 		if ("missing" in task) return `tasks[${index}] is missing ${missingFieldsText(task.missing)}`;
 		tasks.push(task);
 	}
@@ -190,13 +205,19 @@ function parseStart(raw: Record<string, unknown>): ParseResult {
 		agentScope,
 		confirmProjectAgents: raw.confirmProjectAgents !== false,
 	};
-	const cwd = typeof raw.cwd === "string" ? raw.cwd : undefined;
+	if (raw.brief !== undefined && !isText(raw.brief)) {
+		return usageError("start", "brief must be the name of a brief, such as orchestration/critic.");
+	}
+	const defaults: TaskDefaults = {
+		...(typeof raw.cwd === "string" ? { cwd: raw.cwd } : {}),
+		...(isText(raw.brief) ? { brief: raw.brief.trim() } : {}),
+	};
 	if (hasTasks) {
-		const tasks = parseTaskList(raw.tasks, cwd);
+		const tasks = parseTaskList(raw.tasks, defaults);
 		if (typeof tasks === "string") return usageError("start", tasks);
 		return { ok: true, request: { action: "start", tasks, ...options } };
 	}
-	const task = parseStartTask(raw, cwd);
+	const task = parseStartTask(raw, defaults);
 	if ("missing" in task) return usageError("start", `Missing ${missingFieldsText(task.missing)}`);
 	return { ok: true, request: { action: "start", tasks: [task], ...options } };
 }

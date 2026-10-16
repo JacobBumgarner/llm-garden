@@ -51,6 +51,7 @@ import {
 import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { type AgentConfig, type AgentScope, describeAgents, discoverAgents } from "./agents.ts";
+import { type BriefConfig, describeBriefs, discoverBriefs } from "./briefs.ts";
 import { type BlockedCalls, createBlockedCalls, type DetachReason, shouldDetachOnInput } from "./blocked.ts";
 import { createCmuxProgress } from "./cmux.ts";
 import { createCourier, RESULT_MESSAGE_TYPE, stripNoticeHeader, type ResultMessageDetails } from "./courier.ts";
@@ -87,7 +88,7 @@ const SESSION_DIR = resolveSessionDir(getAgentDir());
 type View = "results" | "started" | "detached" | "status" | "send" | "stop" | "error";
 type SubagentArgs = Static<typeof SubagentParams>;
 type RequestOf<A extends Action> = Extract<SubagentRequest, { action: A }>;
-type ResolvedTask = { task: StartTask; agent: AgentConfig };
+type ResolvedTask = { task: StartTask; agent: AgentConfig; brief?: BriefConfig };
 
 interface SubagentDetails {
 	action: Action | "invalid";
@@ -124,11 +125,16 @@ const USER_AGENTS = describeAgents(discoverAgents(process.cwd(), "user").agents)
 
 const AGENT_DESCRIPTION = `Name of the agent to invoke. Available: ${USER_AGENTS}`;
 
+const USER_BRIEFS = describeBriefs(discoverBriefs());
+
+const BRIEF_DESCRIPTION = `Name of a brief to append to the agent's system prompt: standing instructions for one job, so the task holds only the inputs. Kept across resume. Available: ${USER_BRIEFS}`;
+
 const TaskItem = Type.Object({
 	label: Type.String({ description: "Short title for this task, 3 to 7 words" }),
 	agent: Type.String({ description: AGENT_DESCRIPTION }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	brief: Type.Optional(Type.String({ description: BRIEF_DESCRIPTION })),
 });
 
 const SubagentParams = Type.Object({
@@ -149,6 +155,7 @@ const SubagentParams = Type.Object({
 		StringEnum(["wake", "quiet"] as const, { description: "start: how a background result is delivered. Default wake." }),
 	),
 	cwd: Type.Optional(Type.String({ description: "start: working directory for the agent process" })),
+	brief: Type.Optional(Type.String({ description: `start: ${BRIEF_DESCRIPTION}` })),
 	agentScope: Type.Optional(
 		StringEnum(["user", "project", "both"] as const, {
 			description: 'start: which agent directories to use. Default "user". "both" adds project-local agents.',
@@ -244,16 +251,24 @@ async function awaitRuns(
 }
 
 /** Pair each requested task with its agent, or return the error naming the unknown agents. */
-function resolveTasks(request: RequestOf<"start">, agents: AgentConfig[]): ResolvedTask[] | ToolResult {
+function resolveTasks(request: RequestOf<"start">, agents: AgentConfig[], briefs: BriefConfig[]): ResolvedTask[] | ToolResult {
 	const resolved: ResolvedTask[] = [];
-	const unknown: string[] = [];
+	const unknownAgents: string[] = [];
+	const unknownBriefs: string[] = [];
 	for (const task of request.tasks) {
 		const agent = agents.find((candidate) => candidate.name === task.agent);
-		if (agent) resolved.push({ task, agent });
-		else unknown.push(`"${task.agent}"`);
+		if (!agent) unknownAgents.push(`"${task.agent}"`);
+		const brief = task.brief ? briefs.find((candidate) => candidate.name === task.brief) : undefined;
+		if (task.brief && !brief) unknownBriefs.push(`"${task.brief}"`);
+		if (agent && (brief || !task.brief)) resolved.push({ task, agent, brief });
 	}
-	if (unknown.length === 0) return resolved;
-	return errorResult("start", `Unknown agent: ${unknown.join(", ")}. Available agents: ${describeAgents(agents)}.`);
+	if (unknownAgents.length > 0) {
+		return errorResult("start", `Unknown agent: ${unknownAgents.join(", ")}. Available agents: ${describeAgents(agents)}.`);
+	}
+	if (unknownBriefs.length > 0) {
+		return errorResult("start", `Unknown brief: ${unknownBriefs.join(", ")}. Available briefs: ${describeBriefs(briefs)}.`);
+	}
+	return resolved;
 }
 
 /** Ask the user to approve project-local agents. Return true when none need approval or the user agrees. */
@@ -280,13 +295,14 @@ async function startTasks(
 	const background = request.background && call.canBackground;
 	const started: Run[] = [];
 	const failures: string[] = [];
-	for (const { task, agent } of resolved) {
+	for (const { task, agent, brief } of resolved) {
 		try {
 			const run = await call.registry.start({
 				agent,
 				label: task.label,
 				task: task.task,
 				cwd: task.cwd,
+				brief: brief?.filePath,
 				agentScope: request.agentScope,
 				background,
 				notify: request.notify,
@@ -306,7 +322,7 @@ async function handleStart(request: RequestOf<"start">, call: Call): Promise<Too
 		return errorResult("start", `Too many tasks (${request.tasks.length}). Max is ${MAX_START_TASKS}.`);
 	}
 	const discovery = discoverAgents(call.ctx.cwd, request.agentScope);
-	const resolved = resolveTasks(request, discovery.agents);
+	const resolved = resolveTasks(request, discovery.agents, discoverBriefs());
 	if (!Array.isArray(resolved)) return resolved;
 	if (!(await approveProjectAgents(request, call.ctx, resolved, discovery.projectAgentsDir))) {
 		return textResult("start", "error", "Canceled: project-local agents not approved.");
