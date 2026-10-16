@@ -51,13 +51,13 @@ test("getFinalOutput returns the last assistant text", () => {
 
 test("formatPaused renders status, resume id, last output, questions, and the resume instruction", () => {
 	const text = formatPaused({
-		agent: "opus-4-8",
+		agent: "opus-5",
 		sessionId: "sub-abc12345",
 		questions: detectPause([assistant([askCall]), toolResult("ask", "call-1", PAUSE_NOTICE)]) ?? [],
 		lastOutput: "Found the server.\nTwo options.",
 	});
 	const lines = text.split("\n");
-	assert.deepEqual(lines.slice(0, 3), ["status: paused", "resume_id: sub-abc12345", "agent: opus-4-8"]);
+	assert.deepEqual(lines.slice(0, 3), ["status: paused", "resume_id: sub-abc12345", "agent: opus-5"]);
 	assert.equal(lines[3], "last_output: Found the server.");
 	assert.equal(lines[4], "  Two options.");
 	assert.equal(lines[5], "questions:");

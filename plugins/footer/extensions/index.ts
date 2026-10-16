@@ -61,6 +61,7 @@ const MODEL_ALIAS: Record<string, string> = {
 	"claude-opus-5-5": "opus 5.5",
 	"claude-sonnet-5-5": "sonnet 5.5",
 	"claude-opus-4.8[1m]": "opus 4.8",
+	"claude-opus-5[1m]": "opus 5",
 	"claude-sonnet-5[1m]": "sonnet 5",
 	"claude-lillypod-glm[1m]": "glm",
 	"qwen3-8-27b-fp8": "qwen3 27b",
