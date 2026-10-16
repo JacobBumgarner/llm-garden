@@ -24,9 +24,8 @@ Starts when the build is done, or the user says "handover".
 2. Write one short block per intended commit: what it does in plain words,
    the entities changed, and what Verify showed.
 3. Do not paste the diff. The user opens it when a block raises a question.
-4. Editor pass on the blocks before they are shown: a fresh delegate reads
-   `../orchestrate/references/editor.md` relative to this skill and edits the blocks
-   for reading. Facts stay as they are.
+4. Editor pass on the blocks before they are shown: a fresh delegate with
+   brief `orchestration/editor` edits the blocks for reading. Facts stay as they are.
 
 Close with: `Review when ready.`
 
@@ -53,9 +52,9 @@ Starts when the user has squashed and written in `lazygit` and says
 "proofing".
 
 1. Start a fresh agent through the subagent tool. Not the builder.
-2. Its task is `../orchestrate/references/proofing.md` relative to this
-   skill, the plan file path, and the base ref. The brief holds the two
-   questions it answers per commit and the form of its output.
+2. Its brief is `orchestration/proofing`. Its task is the plan file path and
+   the base ref. The brief holds the
+   two questions it answers per commit and the form of its output.
 3. Relay the output as is, and copy it into the Review record under
    Delegates.
 

@@ -71,18 +71,21 @@ technical, for implementers: how, why this shape, where it fails,
 interfaces and schemas, invariants, files per stage
 
 ## Stages
-- Stage 1: title. verify phrase
-- Stage 2: title. verify phrase  (independent of 1)
+- Stage 1: title. verify phrase  [pending]
+- Stage 2: title. verify phrase  (independent of 1)  [pending]
 
 ### Stage 1: title
+- Status: pending
 - Planned: one or two sentences
 - Verify: the named check
 - Files: path, path
-- Outcome: pending
+- Outcome:
 
 ### Stage 2: title (user)
+- Status: pending
 - Do: what the user does
 - See: what the user reports back
+- Outcome:
 
 ----
 
@@ -126,7 +129,8 @@ build diverges from the plan, Details is edited in
 place at that moment, so the file describes what exists.
 
 **Stages.** The index sits above the stage blocks: one line per stage, title
-and verify phrase, for the user. Stages are in dependency order, each bounded by
+and verify phrase, for the user, ending in the stage's Status in square
+brackets so the index reads as a dashboard. Stages are in dependency order, each bounded by
 its Files, with independent stages marked so they can build in parallel in their
 own worktrees. In a stage block, Planned is one or two sentences, or the stage
 is too big. Verify is a check that would fail if the stage were wrong, not "add
@@ -135,10 +139,18 @@ against the real thing. A change that only shows in an interactive surface,
 such as a TUI command, is verified by a test of its logic with the host faked,
 and the surface itself is a user stage. Files is one line, comma separated, corrected to the
 actual list at stage end. A stage that belongs to the user, such as deploy,
-approve, or try the thing, has two fields only: `Do` and `See`. Outcome opens
-with a keyword: `done` in one sentence, `done-modified` with the one-line
-reason, `dropped` with why, or `pending`. A superseded stage collapses to its
-title and `dropped: superseded by N`. Only the orchestrator writes Outcomes.
+approve, or try the thing, has `Do` and `See` in place of Planned, Verify, and
+Files.
+
+Every stage block opens with `Status` and closes with `Outcome`. Status is one
+keyword and nothing else: `pending`, `in progress`, `blocked`, `done`,
+`done-modified`, or `dropped`. Outcome is the narrative: commit, what was
+verified, what the reviewer changed, what diverged and why, what is left open.
+It is empty while the stage is pending and grows as the stage moves. The word
+`done` never appears inside Outcome prose; Status carries it. A superseded
+stage collapses to its title, `Status: dropped`, and `Outcome: superseded by
+N`. Only the orchestrator writes Status and Outcome, and whenever it changes a
+Status it changes the matching index line in the same edit.
 
 **Review record.** The ledger below the fold. Under User: the Q&A sessions
 and the design conversation, question and answer, with an open question marked
@@ -181,8 +193,9 @@ another spoke must honor is copied up to the hub's Decisions at that moment.
 
 The user says what they want. Name the plan in kebab-case after the thing the
 user named, `stash-list` for "a /stash list command". Before the first
-question, quick recon on a free model reads the repo so the questions are
-grounded.
+question, quick recon on a free model with brief `orchestration/recon` reads
+the repo so the questions are grounded. Its task is the questions and an
+output path under scratch.
 
 The goal of Q&A is a deep, shared understanding before anything is designed: the
 user's intent, the design questions it raises, every ambiguity and vague spot,
@@ -210,11 +223,21 @@ stage 1 adds them or this plan skips them.
 On just do it, there is no plan file. Do the work in this session, commit
 under the Commits form, and offer `commit-flow` at Handover when done.
 
-On plan, create the branch and worktree: branch `{plan-name}` under the repo's
-prefix convention if it has one, such as `feat/`, and the worktree where the
-repo already keeps them, else beside the repo as `../{repo}-{plan-name}`. One
-plan to one branch to one worktree, and parallel plans never share a working
-tree. Create `plan/{plan-name}.md` with the `base:` line set to the commit the
+On plan, create the branch `{plan-name}` under the repo's prefix convention if
+it has one, such as `feat/`, and check it out in the repo's own checkout. No
+worktree by default: one plan building alone needs only its branch, and a
+worktree costs a second environment, a second set of ignored files, and
+`--active` style flags on every command.
+
+A worktree is for parallel work only: a second plan, or independent stages of
+one plan, building at the same time. Two things cannot edit one working tree
+at once, and a branch can be checked out in one place at a time, so each
+parallel branch gets its own worktree. Create it inside the repo at
+`.agents/worktrees/{plan-name}/`, which `.gitignore` covers, with
+`git worktree add .agents/worktrees/{plan-name} {branch}`. Then give it an
+environment, such as `uv sync` there, and copy in any ignored local files its
+Verify needs, such as `scripts/`. One plan to one branch to one working tree,
+and parallel plans never share one. Create `plan/{plan-name}.md` with the `base:` line set to the commit the
 branch left from and Success criteria written. Draft `## Problem`, and the
 user rewrites it before the plan proceeds. Say that the user is next needed at
 the design review.
@@ -228,8 +251,8 @@ Background. Write the plan file in this order.
    written.
 2. **Stages.** The orchestrator writes the stage blocks, then the index above
    them.
-3. **Critics.** Two delegates on a different model, sent together with
-   `references/critic.md`, one told the design half and one the placement
+3. **Critics.** Two delegates on a different model, sent together with brief
+   `orchestration/critic`, one told the design half and one the placement
    half. Each writes to its own file under scratch. Copy their questions into
    the Review record under Delegates, then answer every one or change the plan
    and say what moved. A question only the user can answer is held for the design review.
@@ -268,8 +291,8 @@ says approved. Say that the fresh-reader check runs next in background and that
 the user is called back only if it raises a question needing them.
 
 **Fresh-reader check.** Background, after the user says approved. A delegate on
-another model gets `references/fresh-reader.md` and the plan file path, nothing
-else. The brief defines what it reports and what counts as a guess. The
+another model gets brief `orchestration/fresh-reader` and the plan file path,
+nothing else. The brief defines what it reports and what counts as a guess. The
 orchestrator sorts the findings: a guess becomes a stated fact in Details,
 a contradiction with the code is corrected, and anything that would need the
 user is raised through the needs-input notification. Then one more pass on a
@@ -292,17 +315,19 @@ is next needed at the demo.
 Background. Three steps per stage, in dependency order, independent stages in
 parallel in their own worktrees.
 
-1. **Implement.** A delegate gets `references/implementer.md`, the plan file
-   path, and the stage number. It builds, passes Verify and the gates, and
+1. **Implement.** A delegate gets brief `orchestration/implementer`, the plan
+   file path, and the stage number. It builds, passes Verify and the gates, and
    commits the stage once.
-2. **Review.** A delegate on another model gets `references/reviewer.md`, the
-   plan file path, the stage number, and the commit. It edits to the cleanup
+2. **Review.** A delegate on another model gets brief `orchestration/reviewer`,
+   the plan file path, the stage number, and the commit. It edits to the cleanup
    bar, folds its fixups into the stage commit, and rewrites the message under
    the Commits form. It returns what it changed and anything it left because
    it would change a Decision.
-3. **Record.** The orchestrator writes the Outcome per the spec. Where the
-   build diverged from the plan, it edits Details and Decisions in place now,
-   and corrects Files to the actual list.
+3. **Record.** The orchestrator sets Status, writes the Outcome per the spec,
+   and updates the stage's index line. Where the build diverged from the
+   plan, it edits Details and Decisions in place now, and corrects Files to
+   the actual list. A stage whose implementer has started is `in progress`;
+   one waiting on a blocking question or a user stage is `blocked`.
 
 Verify is a condition both the first two steps must pass, not a step of its own.
 The build never waits for the user, with one exception: a user stage stops the
@@ -324,30 +349,39 @@ decided at Checkpoint 1 whether stage 1 adds them. Gate results are one line in
 the Outcome.
 
 **Commits.** Each stage ends in one commit on the plan's branch. The form
-below is copied in `references/implementer.md` and `references/reviewer.md`,
-and the copies must match this one. The title
+below is copied in the `orchestration/implementer` and
+`orchestration/reviewer` briefs, and the copies must match this one. The title
 carries the stage and says what the change does, under about 60 characters:
 `[s2] client: ask the server for its minimum client version`.
 
 The body has two parts separated by a line holding only `---`. Above it, the
 technical description. Below it, the plain description. Either part is as long
-as it needs to be, in as many paragraphs as it needs. Inside a paragraph there
-are no line breaks: each paragraph is one line, however long, so `lazygit` and
-GitHub wrap it to their own width.
+as it needs to be. Each paragraph and each list item is one line, however
+long, with no line breaks inside it, so `lazygit` and GitHub wrap it to their
+own width.
 
-The technical part is written in Plain language. Its first sentence says what
-the change makes possible or prevents, and why. What follows names the pieces
-that matter to a reader deciding whether to open the diff, and any behavior
-that would surprise them. It is not an inventory of the diff: a sentence that
-lists identifiers is describing the diff, and the diff is already there.
+The technical part is written in Plain language. It opens with a short
+paragraph. Its first sentence says what the change makes possible or prevents,
+and why. The sentences after it cover any behavior that would surprise a
+reader. Then comes a list, one `- ` item per line, naming each piece that
+changed and what is different in it: a file, a function, a type, a flag, with
+the new behavior in a few words. One file's changes go in one item. Tests go
+in a single item that names the test files. The list is for a reader deciding
+whether to open the diff, so an item says what is different, not that a file
+was edited.
 
 The plain part is for a reader who has never seen the code: what is different
-for them now.
+for them now. Prose only, no list.
 
 ```
 [s2] client: ask the server for its minimum client version
 
-Adds client_info() so KernelClient can ask the server for the oldest client version it still supports. The call has a 2 s timeout so a slow server cannot stall a turn. The User-Agent default now merges through httpx.Headers, so a caller's header wins under any casing and nothing is sent twice.
+Adds client_info() so KernelClient can ask the server for the oldest client version it still supports. The call has a 2 s timeout so a slow server cannot stall a turn.
+
+- client.py gains client_info(), which calls GET /client-info with a 2 s timeout and returns a ClientInfo.
+- client.py builds the default User-Agent through httpx.Headers, so a caller's header wins under any casing and nothing is sent twice.
+- models.py gains ClientInfo with min_client_version and server_version.
+- Tests added in test_client.py and test_models.py.
 
 ---
 
@@ -362,8 +396,8 @@ Nothing is pushed. These commits are the agent's record, and the user rewrites
 them later. The plan file is never part of a stage commit, and it is not
 committed on its own either until the demo is done.
 
-**Cleanup bar.** Copied in `references/reviewer.md`, and the copy must match
-this one. On top of the repo's conventions and gates:
+**Cleanup bar.** Copied in the `orchestration/reviewer` brief, and the copy
+must match this one. On top of the repo's conventions and gates:
 
 - Functions are small, with shallow nesting and one job each.
 - Each file does one thing, and it is what the module name says.
@@ -381,8 +415,8 @@ this one. On top of the repo's conventions and gates:
 
 First, in background. Rewrite Overview from the built code and the current
 Details. Then a second fresh-reader check: a delegate on another model gets
-`references/fresh-reader.md`, the plan file path, and the word that the code is
-built. It names every line where the file no longer describes what got built.
+brief `orchestration/fresh-reader`, the plan file path, and the word that the
+code is built. It names every line where the file no longer describes what got built.
 Fix each in place. Then an editor pass on Overview, Decisions, and Details.
 
 Then, in session. Go down Success criteria in order. For each, the user runs the
@@ -400,6 +434,32 @@ When the commits are merged, set `step: merged`, move the plan to
 `plan/archive/unreleased/`, delete `plan/scratch/{plan-name}/`, and update
 the spoke's status line in its hub.
 
+**Pruning a worktree after merge.** Run every step from a shell in the repo's
+main checkout, never from inside the worktree, because removing the directory
+under a shell kills that shell.
+
+1. `git worktree list` to see what exists.
+2. Copy out of the worktree anything untracked or ignored that should
+   survive: `plan/scratch/{plan-name}/`, local `scripts/`, a `.env`. Git will
+   not carry them over, and `git worktree remove` deletes them.
+3. In the main checkout, `git status --short`. If it shows uncommitted
+   changes, stop and have the user commit or stash them first. `git pull` with
+   autostash will reapply them onto the merged tree, and when the merge moved
+   files, the reapply conflicts and leaves markers in the working tree.
+4. `git fetch -p && git pull --ff-only`.
+5. `git worktree remove .agents/worktrees/{plan-name}`, with `--force` when it
+   still holds untracked files, then `git worktree prune`.
+6. `git branch -d {branch}`. The merge usually deletes the remote branch, and
+   `git branch -a | grep {plan-name}` shows whether one remains. If so,
+   `git push origin --delete {branch}`.
+7. `git worktree list` shows the main checkout alone, and the suite passes
+   there.
+
+A rebase in the main checkout fails with "untracked working tree files would be
+overwritten" when a replayed commit adds a file that now exists untracked, for
+example a file the branch first tracked and later untracked. Move the
+directory aside for the rebase and move it back after.
+
 ## Working rules
 
 ### Session and background
@@ -413,25 +473,33 @@ when a session is done, and say when they are next needed.
 
 Three tiers of model are available. Free (`glm`, `qwen`) for lookups, retrieval,
 reading the repo, summarizing, and any check with a mechanical answer, used
-without limit. Mid (`haiku`, `sonnet`) for recon with judgment, critique, and
-mechanical stages. Heavy (`opus-4.8`, sometimes `5.5`) for design-bearing
-implementation and for reviewing work a lower tier produced. A review always
-runs on a different model than the work it reviews.
+without limit. Mid (`haiku-5-5`, `sonnet-5-5`) for recon with judgment, critique, and
+mechanical stages. Heavy (`fable-5-1`) for reviewing work a lower tier produced
+and for critique where the design is in doubt. Design-bearing implementation
+runs on `sonnet-5-5`, not on a heavy model. A review always runs on a
+different model than the work it reviews.
 
-Each delegate is a fresh session that cannot read this skill. Its brief is a
-file under `references/` beside this skill, one per job, saying what to read,
-what to do, what to write where, and what to return. The task you give a
-delegate names the brief path and the inputs, nothing else, one per line with
-the brief first and every path absolute:
+Each delegate is a fresh session that cannot read this skill. Its standing
+instructions are a brief, one per job, which the subagent tool appends to the
+delegate's system prompt when the `brief` field names it. The briefs for this
+skill are `orchestration/recon`, `orchestration/critic`,
+`orchestration/fresh-reader`, `orchestration/implementer`,
+`orchestration/reviewer`, `orchestration/editor`, and `orchestration/proofing`.
+The tool lists them. The task is then only the inputs, one per line, every
+path absolute. Repo facts such as how to run tests, which runner to use, and
+code style are not inputs: every brief says to read the repo's `AGENTS.md`,
+so they live there.
 
 ```
-Brief: /abs/path/to/references/critic.md
-Plan file: /abs/path/to/plan/stash-list.md
-Half: design
+brief: orchestration/critic
+task: |
+  Plan file: /abs/path/to/plan/stash-list.md
+  Half: design
 ```
 
-The delegate reads the brief itself. Delegates write to `plan/scratch/{plan-name}/` or to
-the Review record under Delegates. Independent delegates run concurrently, sent
+Never paraphrase a brief into the task, and do not add lists of files to
+read: the plan's Files and Details name them. Delegates write to
+`plan/scratch/{plan-name}/` or to the Review record under Delegates. Independent delegates run concurrently, sent
 in one message. Before any user round, send out whatever recon would make the
 questions sharper.
 
@@ -472,10 +540,8 @@ Common words. Verbs stay verbs: "the hook checks types", not "the hook performs
 type checking".
 
 **Editor pass.** Before the user reads a plan file, a fresh mid-tier delegate
-edits it for reading. Its brief is `references/editor.md`, and the delegate
-reads it directly. The task you give it is one line: the file path
-and the sections. The brief holds the rules, so never paraphrase them into
-the task. When it returns, read the diff of the plan file and revert any line
+edits it for reading. Its brief is `orchestration/editor`. The task you give
+it is one line: the file path and the sections. When it returns, read the diff of the plan file and revert any line
 where a fact changed and not only its phrasing. Anything the delegate lists
 under possible fact issues, you resolve. The pass runs after Plan step 5,
 after the Demo rewrite of Overview, and on the Handover blocks in
