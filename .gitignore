@@ -4,3 +4,4 @@ tmp/
 plan/scratch/
 node_modules/
 dotfiles/cmux/cmux.json.cmux-write.lock
+plan/
