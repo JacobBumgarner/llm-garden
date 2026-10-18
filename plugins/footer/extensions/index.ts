@@ -1,13 +1,21 @@
 /**
- * Minimal one-line footer: `tokens ⣿ · cost · elapsed · model thinking ···· repo (branch)`.
+ * Minimal one-line footer: `▄ · tokens ⣿ · cost · elapsed · model thinking ···· repo (branch)`.
  *
- * The braille glyph after the token count is an activity indicator:
+ * The leading cell is focus-mode's breathing bar when focus is on; it is pinned to the first
+ * column so it stays put while the other fields change width.
+ *
+ * The braille glyph after the token count is a stream-rate meter:
  * - idle: dim, all eight dots
  * - turn starts: drains in orange to a two-dot resting row, then holds
- * - tokens streaming or a tool running: a snake grows out of the resting pair
- *   and circles the cell; otherwise it holds its frame
- * - stalled mid-message for STALL_MS: current frame freezes and blinks red/grey
- * - turn ends: the snake unwinds back to the resting pair, holds briefly, then
+ * - tokens streaming: each column fills bottom-up with the output rate, the
+ *   left column a smoothed average and the right the last second. The
+ *   scale is relative to the model: four dots is the fastest smoothed rate
+ *   that model has reached this session. Text,
+ *   thinking, and tool-call arguments all count. Provider usage drives the
+ *   rate when it advances mid-stream, chars/4 fills in between. Tool runs and
+ *   pauses sit at the resting pair
+ * - stalled mid-message for STALL_MS (8s): current frame freezes and blinks red/grey
+ * - turn ends: the fill falls back to the resting pair, holds briefly, then
  *   refills in dim to eight dots
  *
  * The elapsed clock counts from the session's first entry, or from the most
@@ -80,28 +88,14 @@ function modelAlias(id: string): string {
 
 const modelColor = (alias: string) => MODEL_COLOR[alias.split(" ")[0]];
 
-const BRANCH_COLOR: Record<string, string> = {
-	feat: "#A3BE8C",
-	fix: "#BF616A",
-	refactor: "#88C0D0",
-	maint: "#81A1C1",
-	docs: "#D8DEE9",
-	test: "#EBCB8B",
-	junk: "#4C566A",
-};
-
-function branchColor(branch: string): string | undefined {
-	return branch.includes("/") ? BRANCH_COLOR[branch.split("/")[0]] : undefined;
-}
-
 const REPO_PREFIX = /^lrl-xai-/;
 
 // ---------------------------------------------------------------------------
 // Formatting
 
 function abbrev(n: number): string {
-	if (n >= 1_000_000) return `${Math.round(n / 1_000_000)}M`;
-	if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
 	return String(n);
 }
 
@@ -154,41 +148,73 @@ const REST = dots(2);
 const DRAIN_ORDER = [0x08, 0x01, 0x02, 0x10, 0x20, 0x04];
 const DRAIN = DRAIN_ORDER.map((_, i) => braille(DRAIN_ORDER.slice(0, i + 1).reduce((a, b) => a & ~b, 0xff)));
 const REFILL = [2, 3, 4, 5, 6, 7, 8].map(dots);
-// Frames to hold the resting pair after unwinding, before the refill begins.
+// Each column bottom-up: left 7 3 2 1, right 8 6 5 4.
+const LEFT_COL = [0x40, 0x04, 0x02, 0x01];
+const RIGHT_COL = [0x80, 0x20, 0x10, 0x08];
+const column = (col: number[], n: number) => col.slice(0, n).reduce((a, b) => a | b, 0);
+const columns = (left: number, right: number) => braille(column(LEFT_COL, left) | column(RIGHT_COL, right));
+// Frames to hold the resting pair after the fill falls, before the refill begins.
 const SETTLE_FRAMES = 3;
-// Braille dots around the cell perimeter, counter-clockwise from bottom-left: 7 3 2 1 4 5 6 8.
-const RING = [0x40, 0x04, 0x02, 0x01, 0x08, 0x10, 0x20, 0x80];
-const snake = (head: number, len: number) =>
-	braille(Array.from({ length: len }, (_, i) => RING[(((head - i) % 8) + 8) % 8]).reduce((a, b) => a | b, 0));
 
-const SNAKE_LEN = 6;
-const REST_LEN = 2;
-
+const REST_LEN = 1;
 const FRAME_MS = 200;
 const ACTIVE_MS = 5_000;
-const STALL_MS = 5_000;
+const STALL_MS = 8_000;
 const BLINK_MS = 1_000;
 
-type Phase = "idle" | "draining" | "waiting" | "flowing" | "unwinding" | "settling" | "refilling";
+// Providers deliver tokens in bursts a second or two apart. The short window feeds the right
+// column so it reacts to each burst; the long one spans several and feeds the EMA for the left.
+// Each model's ceiling is the peak smoothed rate seen this session, floored at MIN_CEILING so
+// the first turns do not peg on noise.
+const MIN_CEILING = 20;
+const CHARS_PER_TOKEN = 4;
+const COL_DOTS = 4;
+const SNAP_WINDOW_MS = 1_000;
+const RATE_WINDOW_MS = 3_000;
+const RATE_SMOOTHING = 0.3;
+
+/** Per-model peak smoothed rates for this session. */
+class RateCeilings {
+	private peaks: Record<string, number> = {};
+
+	get(model: string): number {
+		return Math.max(MIN_CEILING, this.peaks[model] ?? 0);
+	}
+
+	observe(model: string, rate: number): void {
+		this.peaks[model] = Math.max(this.peaks[model] ?? 0, rate);
+	}
+}
+
+type Phase = "idle" | "draining" | "waiting" | "flowing" | "falling" | "settling" | "refilling";
 
 /** Tracks turn/stream lifecycle and renders the current glyph frame. */
 class ActivityGlyph {
 	private phase: Phase = "idle";
 	private phaseFrame = 0;
-	// Snake head index into RING and body length; head 0 / len 2 is the resting pair.
-	private head = 0;
-	private len = REST_LEN;
-	private unwindSteps = 0;
+	private avgLevel = REST_LEN;
+	private nowLevel = REST_LEN;
+	private rate = 0;
+	private samples: { at: number; tokens: number }[] = [];
+	// Cumulative output-token estimate for the current message and the last provider count seen.
+	private estimate = 0;
+	private providerOutput = 0;
 	private streaming = false;
 	private toolsRunning = 0;
 	private lastActivity = 0;
 	private timer: ReturnType<typeof setInterval> | undefined;
 
+	private model = "";
+	private readonly ceilings = new RateCeilings();
+
 	constructor(private readonly onFrame: () => void) {}
 
-	turnStart(): void {
-		this.head = 0;
-		this.len = REST_LEN;
+	turnStart(model: string): void {
+		this.model = model;
+		this.avgLevel = REST_LEN;
+		this.nowLevel = REST_LEN;
+		this.rate = 0;
+		this.samples = [];
 		this.setPhase("draining");
 		this.stopTimer();
 		this.timer = setInterval(() => this.tick(), FRAME_MS);
@@ -196,17 +222,32 @@ class ActivityGlyph {
 
 	messageStart(): void {
 		this.streaming = true;
+		this.estimate = 0;
+		this.providerOutput = 0;
 		this.touch();
 	}
 
-	delta(): void {
+	/** Record a stream chunk: `chars` of new delta text and the provider's running output count, if any. */
+	delta(chars: number, providerOutput: number): void {
 		this.touch();
+		const next =
+			providerOutput > this.providerOutput ? providerOutput : this.estimate + chars / CHARS_PER_TOKEN;
+		this.providerOutput = Math.max(this.providerOutput, providerOutput);
+		const tokens = next - this.estimate;
+		this.estimate = next;
+		if (tokens > 0) this.samples.push({ at: this.lastActivity, tokens });
 		if (this.phase !== "flowing") this.setPhase("flowing");
 	}
 
 	messageEnd(): void {
 		this.streaming = false;
+		this.estimate = 0;
 		this.touch();
+	}
+
+	/** Output tokens of the message currently streaming, zero between messages. */
+	inFlight(): number {
+		return this.streaming ? Math.round(this.estimate) : 0;
 	}
 
 	toolStart(): void {
@@ -223,14 +264,7 @@ class ActivityGlyph {
 	turnEnd(): void {
 		this.streaming = false;
 		this.toolsRunning = 0;
-		if (this.atRest()) {
-			this.setPhase("settling");
-			return;
-		}
-		let steps = (RING.length - this.head) % RING.length;
-		if (steps < this.len - REST_LEN) steps += RING.length;
-		this.unwindSteps = steps;
-		this.setPhase("unwinding");
+		this.setPhase(Math.max(this.avgLevel, this.nowLevel) > REST_LEN ? "falling" : "settling");
 	}
 
 	dispose(): void {
@@ -251,25 +285,23 @@ class ActivityGlyph {
 			case "settling":
 				return live(REST);
 			default:
-				return live(snake(this.head, this.len));
+				return live(columns(this.avgLevel, this.nowLevel));
 		}
 	}
 
-	private atRest(): boolean {
-		return this.head % RING.length === 0 && this.len === REST_LEN;
-	}
-
-	/** Advance the head and lengthen the body toward SNAKE_LEN. */
-	private grow(): void {
-		this.head = (this.head + 1) % RING.length;
-		this.len = Math.min(SNAKE_LEN, this.len + 1);
-	}
-
-	/** Advance the head and shrink the body so it reaches REST_LEN exactly as the budgeted steps run out. */
-	private unwind(): void {
-		this.head = (this.head + 1) % RING.length;
-		this.unwindSteps--;
-		if (this.len - REST_LEN > this.unwindSteps) this.len--;
+	/** Map recent tokens/s onto the right column and its running average onto the left, against the model's ceiling. */
+	private measure(): void {
+		const now = Date.now();
+		this.samples = this.samples.filter((s) => now - s.at <= RATE_WINDOW_MS);
+		const perSecond = (windowMs: number) =>
+			this.samples.filter((s) => now - s.at <= windowMs).reduce((sum, s) => sum + s.tokens, 0) * (1000 / windowMs);
+		const instant = perSecond(SNAP_WINDOW_MS);
+		this.rate += (perSecond(RATE_WINDOW_MS) - this.rate) * RATE_SMOOTHING;
+		this.ceilings.observe(this.model, this.rate);
+		const ceiling = this.ceilings.get(this.model);
+		const level = (rate: number) => REST_LEN + Math.round((COL_DOTS - REST_LEN) * Math.min(1, rate / ceiling));
+		this.avgLevel = level(this.rate);
+		this.nowLevel = level(instant);
 	}
 
 	private touch(): void {
@@ -298,10 +330,11 @@ class ActivityGlyph {
 			this.setPhase("idle");
 			this.stopTimer();
 		} else if (this.phase === "flowing" && this.alive()) {
-			this.grow();
-		} else if (this.phase === "unwinding") {
-			this.unwind();
-			if (this.unwindSteps <= 0) this.setPhase("settling");
+			this.measure();
+		} else if (this.phase === "falling") {
+			this.avgLevel = Math.max(REST_LEN, this.avgLevel - 1);
+			this.nowLevel = Math.max(REST_LEN, this.nowLevel - 1);
+			if (this.avgLevel <= REST_LEN && this.nowLevel <= REST_LEN) this.setPhase("settling");
 		} else if (this.phase === "settling" && this.phaseFrame >= SETTLE_FRAMES) {
 			this.setPhase("refilling");
 		}
@@ -331,9 +364,13 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext) {
 		const unsubs = [
 			footerData.onBranchChange(render),
 			pi.on("model_select", render),
-			pi.on("agent_start", () => glyph.turnStart()),
+			pi.on("agent_start", () => glyph.turnStart(ctx.model?.id ?? "")),
 			pi.on("message_start", (e) => isAssistant(e) && glyph.messageStart()),
-			pi.on("message_update", () => glyph.delta()),
+			pi.on("message_update", (e) => {
+				const ev = e.assistantMessageEvent;
+				const chars = "delta" in ev ? ev.delta.length : 0;
+				glyph.delta(chars, "partial" in ev ? (ev.partial.usage?.output ?? 0) : 0);
+			}),
 			pi.on("message_end", (e) => isAssistant(e) && glyph.messageEnd()),
 			pi.on("tool_execution_start", () => glyph.toolStart()),
 			pi.on("tool_execution_end", () => glyph.toolEnd()),
@@ -351,11 +388,8 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext) {
 			invalidate() {},
 			render(width: number): string[] {
 				const branch = footerData.getGitBranch();
-				const branchHex = branch ? branchColor(branch) : undefined;
 				const branchText = branch ? ` (${branch})` : "";
-				const repo =
-					theme.fg("accent", basename(ctx.cwd).replace(REPO_PREFIX, "")) +
-					(branchHex ? hex(branchHex, branchText) : theme.fg("muted", branchText));
+				const repo = theme.fg("borderMuted", basename(ctx.cwd).replace(REPO_PREFIX, "") + branchText);
 
 				const alias = ctx.model ? modelAlias(ctx.model.id) : "no model";
 				const modelHex = modelColor(alias);
@@ -365,13 +399,16 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext) {
 				const thinking = theme.fg(THINKING_COLOR[level] ?? "muted", level);
 
 				const used = ctx.getContextUsage()?.tokens;
-				const tokens = orange(used === undefined ? "?" : abbrev(used));
+				const tokens = orange(used === undefined || used === null ? "?" : abbrev(used + glyph.inFlight()));
 				const activity = glyph.render((s) => theme.fg("dim", s));
 				const price = theme.fg("dim", `$${sessionCost(ctx).toFixed(2)}`);
 				const age = theme.fg("dim", elapsed(Date.now() - startedAt));
 
-				const left = ` ${[`${tokens} ${activity}`, price, age, `${model} ${thinking}`].join(sep)}`;
-				const statuses = [...footerData.getExtensionStatuses().values()].join("  ");
+				// The focus-mode breathing bar takes the first column so it never shifts with the other fields.
+				const all = footerData.getExtensionStatuses();
+				const breath = all.get("focus");
+				const statuses = [...all.entries()].filter(([k]) => k !== "focus").map(([, v]) => v).join("  ");
+				const left = `${breath ? ` ${breath}${sep}` : " "}${[`${tokens} ${activity}`, price, age, `${model} ${thinking}`].join(sep)}`;
 				const right = `${statuses ? `${statuses}  ` : ""}${repo} `;
 
 				const pad = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(right)));

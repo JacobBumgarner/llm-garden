@@ -405,18 +405,40 @@ export default function focusMode(pi: ExtensionAPI): void {
 	let swirlTimer: ReturnType<typeof setInterval> | undefined;
 	let swirlFrame = 0;
 
-	// Breathing cycle, one tick per frame: dark, sweep waxing to waning, dark, sweep back.
-	const DARK = "🌑";
-	const SWEEP = ["🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
-	const SWIRL_FRAMES = [DARK, ...SWEEP, DARK, ...SWEEP.toReversed()];
+	// Box breathing, four ticks per side: the bar rises on inhale, holds full, falls on exhale, holds empty.
+	// Block Elements only, so every frame shares one baseline and cell width.
+	const INHALE = ["▂", "▄", "▆", "█"];
+	const HOLD_FULL = ["█", "█", "█", "█"];
+	const EXHALE = ["▆", "▄", "▂", "▁"];
+	const HOLD_EMPTY = ["▁", "▁", "▁", "▁"];
+	const SWIRL_FRAMES = [...INHALE, ...HOLD_FULL, ...EXHALE, ...HOLD_EMPTY];
 	const SWIRL_MS = 1200;
+	/** Bar color: a theme role name, or a `#rrggbb` hex rendered as a truecolor escape. */
+	let swirlColor = "#86B3AD";
 
-	/** One footer frame: the moon glyph alone. */
-	function swirlText(): string {
-		return SWIRL_FRAMES[swirlFrame % SWIRL_FRAMES.length]!;
+	/** How far the quiet hold ticks blend toward black; kept shallow so the colour doesn't fall to grey. */
+	const HOLD_DROP = 0.15;
+
+	function paint(color: string, text: string, drop = 0): string {
+		if (color.startsWith("#")) {
+			const n = parseInt(color.slice(1), 16);
+			const c = (shift: number) => {
+				const v = (n >> shift) & 255;
+				return Math.round(v * (1 - drop));
+			};
+			return `\x1b[38;2;${c(16)};${c(8)};${c(0)}m${text}\x1b[0m`;
+		}
+		return ui ? ui.theme.fg(color as Parameters<Theme["fg"]>[0], text) : text;
 	}
 
-	/** Spin the moon on a timer, calling setStatus on the captured ui object so a stale ctx can't block it. */
+	/** One footer frame: the bar in the chosen color; hold ticks alternate dropped and full so each one still counts. */
+	function swirlText(): string {
+		const i = swirlFrame % SWIRL_FRAMES.length;
+		const holding = (i >= 4 && i < 8) || i >= 12;
+		return paint(swirlColor, SWIRL_FRAMES[i]!, holding && i % 2 === 0 ? HOLD_DROP : 0);
+	}
+
+	/** Step the bar on a timer, calling setStatus on the captured ui object so a stale ctx can't block it. */
 	function startSwirl(): void {
 		stopSwirl();
 		swirlFrame = 0;
@@ -583,6 +605,16 @@ export default function focusMode(pi: ExtensionAPI): void {
 				setLevel(ctx, wanted as FocusLevel);
 			}
 			ctx.ui.notify(level === "hidden" ? `focus: hidden · counter per ${placement}` : `focus: ${level}`, "info");
+		},
+	});
+	pi.registerCommand("breath", {
+		description: "Color the breathing bar: /breath <theme role | #rrggbb>",
+		handler: async (args, ctx) => {
+			const arg = (args ?? "").trim();
+			if (arg) swirlColor = arg;
+			ui = ctx.ui;
+			ctx.ui.setStatus("focus", swirlText());
+			ctx.ui.notify(`breath: ${swirlColor}`, "info");
 		},
 	});
 	pi.registerShortcut("ctrl+shift+o", {
