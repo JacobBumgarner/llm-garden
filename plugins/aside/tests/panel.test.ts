@@ -82,15 +82,13 @@ function answer(b: FakeBackend, content: string) {
 const wheel = (delta: number) => ({ type: "wheel", wheelDelta: delta }) as TuiMouseEvent;
 
 describe("AsidePanel layout", () => {
-	it("draws the title and a status line under the editor in a box", async () => {
+	it("draws a status line under the editor and leaves the frame to the overlay", async () => {
 		const { panel } = setup();
 		await tick();
-		const lines = panel.render(60);
-		assert.match(lines[0], /^┌ aside ─+┐$/);
-		assert.match(lines.at(-1) ?? "", /^└─+┘$/);
-		assert.match(lines.at(-2) ?? "", /opus 5 · esc hide/);
+		const lines = panel.render(56);
+		assert.match(lines.at(-1) ?? "", /opus 5 · esc hide/);
 		assert.ok(!text(panel).includes("mcp"));
-		assert.ok(lines.every((l) => [...l].length === 60));
+		assert.ok(lines.every((l) => !/[╭╮╰╯]/.test(l)));
 	});
 });
 
@@ -104,7 +102,7 @@ describe("startup gap", () => {
 		panel.handleInput("i");
 		panel.handleInput("enter");
 		await tick();
-		assert.match(text(panel), /│ hi\s+│\n│\s+waiting for side agent/);
+		assert.match(text(panel), /(^|\n)hi\s*\n\s+waiting for side agent/);
 		assert.deepEqual(b.sent, []);
 		b.release?.();
 		await tick();
@@ -139,7 +137,7 @@ describe("startup gap", () => {
 		const { panel } = setup(b);
 		await tick();
 		const out = text(panel);
-		assert.match(out, /│ what is x\?/);
+		assert.match(out, /(^|\n)\s*what is x\?/);
 		assert.ok(!out.includes("> what is x"));
 		assert.match(out, /x is a thing/);
 		assert.match(out, /read a\.ts/);
@@ -191,7 +189,7 @@ describe("sending", () => {
 		for (const k of ["a", "b", "enter"]) panel.handleInput(k);
 		await tick();
 		assert.deepEqual(backend.sent, ["ab"]);
-		assert.match(text(panel), /│ ab/);
+		assert.match(text(panel), /(^|\n)\s*ab/);
 		panel.handleInput("enter");
 		await tick();
 		assert.deepEqual(backend.sent, ["ab"]);
@@ -234,7 +232,7 @@ describe("sending", () => {
 		panel.handleInput("q");
 		panel.handleInput("enter");
 		await tick();
-		assert.match(text(panel), /│ q\s+│\n│\s+queued/);
+		assert.match(text(panel), /(^|\n)q\s*\n\s+queued/);
 	});
 });
 
@@ -270,7 +268,7 @@ describe("keys", () => {
 		panel.focused = true;
 		panel.handleInput("z");
 		assert.equal(panel.focused, true);
-		assert.match(text(panel), /\nz|│ z/);
+		assert.match(text(panel), /(^|\n)\s*z/);
 	});
 });
 
@@ -356,7 +354,7 @@ describe("scrolling", () => {
 		panel.handleInput("q");
 		panel.handleInput("enter");
 		await tick();
-		assert.match(text(panel), /│ q/);
+		assert.match(text(panel), /(^|\n)\s*q/);
 	});
 
 	describe("text selection", () => {
@@ -374,9 +372,9 @@ describe("scrolling", () => {
 
 		it("copies the dragged span on release and keeps it highlighted", async () => {
 			const { panel, copies } = await withText();
-			panel.handleMouse(mouse("press", 2, 1));
-			panel.handleMouse(mouse("drag", 6, 1));
-			panel.handleMouse(mouse("release", 6, 1));
+			panel.handleMouse(mouse("press", 0, 0));
+			panel.handleMouse(mouse("drag", 4, 0));
+			panel.handleMouse(mouse("release", 4, 0));
 			assert.deepEqual(copies, ["hello"]);
 			panel.handleInput("x");
 			panel.render(60);
@@ -385,15 +383,15 @@ describe("scrolling", () => {
 
 		it("spans lines when dragged down", async () => {
 			const { panel, copies } = await withText();
-			panel.handleMouse(mouse("press", 8, 1));
-			panel.handleMouse(mouse("drag", 7, 3));
-			panel.handleMouse(mouse("release", 7, 3));
+			panel.handleMouse(mouse("press", 6, 0));
+			panel.handleMouse(mouse("drag", 5, 2));
+			panel.handleMouse(mouse("release", 5, 2));
 			assert.deepEqual(copies, ["world\n\nsecond"]);
 		});
 
 		it("copies one line on a double click", async () => {
 			const { panel, copies } = await withText();
-			panel.handleMouse(mouse("click", 4, 3, { clickCount: 2 }));
+			panel.handleMouse(mouse("click", 2, 2, { clickCount: 2 }));
 			assert.deepEqual(copies, ["second line"]);
 		});
 
@@ -403,9 +401,9 @@ describe("scrolling", () => {
 			await tick();
 			answer(backend, "hello world\n\nsecond line");
 			assert.match(text(panel), /esc hide/);
-			panel.handleMouse(mouse("click", 4, 3, { clickCount: 2 }));
+			panel.handleMouse(mouse("click", 2, 2, { clickCount: 2 }));
 			assert.doesNotMatch(text(panel), /esc hide/);
-			assert.match(panel.render(60).at(-2) ?? "", /copied/);
+			assert.match(panel.render(56).at(-1) ?? "", /copied/);
 			clock += 1499;
 			assert.match(text(panel), /copied/);
 			clock += 1;
@@ -415,14 +413,14 @@ describe("scrolling", () => {
 
 		it("copies nothing when released without movement", async () => {
 			const { panel, copies } = await withText();
-			panel.handleMouse(mouse("press", 3, 1));
-			panel.handleMouse(mouse("release", 3, 1));
+			panel.handleMouse(mouse("press", 1, 0));
+			panel.handleMouse(mouse("release", 1, 0));
 			assert.deepEqual(copies, []);
 		});
 
 		it("ignores a press outside the transcript body", async () => {
 			const { panel } = await withText();
-			assert.equal(panel.handleMouse(mouse("press", 3, 0))?.capture, false);
+			assert.equal(panel.handleMouse(mouse("press", 1, -1))?.capture, false);
 		});
 	});
 });

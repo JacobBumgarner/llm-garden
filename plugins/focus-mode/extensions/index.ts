@@ -43,6 +43,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { ActionLog, type GroupCount, hasText, labelFor } from "./log.ts";
+import { OverlaySlot } from "../../shared/overlay.ts";
 import { ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH, type PanelTarget } from "./panel.ts";
 import { durationLabel, editDiffLines, expansionLines, resultText, type StripColor, stripColor } from "./strip.ts";
 import { summarize } from "./summarize.ts";
@@ -399,9 +400,7 @@ export default function focusMode(pi: ExtensionAPI): void {
 	const log = new ActionLog(VISIBLE_TOOLS);
 	/** Redraw hook of each hidden tool component, keyed by tool call id. */
 	const redraws = new Map<string, () => void>();
-	let panelOpen = false;
-	let closePanel: (() => void) | undefined;
-	let redrawPanel: (() => void) | undefined;
+	const panelSlot = new OverlaySlot();
 
 	const tickers = new Tickers();
 	pi.registerToolRenderer((toolName, next) =>
@@ -410,7 +409,7 @@ export default function focusMode(pi: ExtensionAPI): void {
 
 	log.onChange((entry) => {
 		for (const id of log.groupIds(entry.group)) redraws.get(id)?.();
-		redrawPanel?.();
+		panelSlot.active?.requestRender();
 	});
 	pi.on("message_start", (event) => {
 		if (event.message.role === "user") log.nextGroup(labelFor(event.message.content));
@@ -483,39 +482,31 @@ export default function focusMode(pi: ExtensionAPI): void {
 
 	/** Open the panel, scrolled to `target` when given; a second call while open closes it. */
 	async function openPanel(target: ExtensionUIContext, scrollTo?: PanelTarget): Promise<void> {
-		if (panelOpen) {
-			closePanel?.();
+		if (panelSlot.active) {
+			panelSlot.close();
 			return;
 		}
-		panelOpen = true;
-		try {
-			await target.custom<void>(
-				(tui, theme, _keybindings, done) => {
-					const panel = new ActionsPanel({
-						entries: () => log.visible(),
-						groups: () => log.groups(),
-						label: (group) => log.label(group),
-						target: scrollTo,
-						rows: () => tui.terminal.rows,
-						requestRender: () => tui.requestRender(),
-						theme,
-						terminal: tui.terminal,
-						done: () => done(),
-					});
-					closePanel = () => done();
-					redrawPanel = () => tui.requestRender();
-					return panel;
-				},
-				{
-					overlay: true,
-					overlayOptions: { anchor: "center", width: PANEL_WIDTH, minWidth: PANEL_MIN_WIDTH },
-				},
-			);
-		} finally {
-			panelOpen = false;
-			closePanel = undefined;
-			redrawPanel = undefined;
-		}
+		let panel: ActionsPanel | undefined;
+		await panelSlot.open(target, {
+			options: { anchor: "center", width: PANEL_WIDTH, minWidth: PANEL_MIN_WIDTH },
+			title: () => panel?.heading() ?? "",
+			outsideClick: "close",
+			refreshMs: TICK_MS,
+			build: (host, tui, theme) => {
+				panel = new ActionsPanel({
+					entries: () => log.visible(),
+					groups: () => log.groups(),
+					label: (group) => log.label(group),
+					target: scrollTo,
+					rows: () => tui.terminal.rows,
+					requestRender: () => tui.requestRender(),
+					theme,
+					terminal: tui.terminal,
+					done: () => host.close(),
+				});
+				return panel;
+			},
+		});
 	}
 
 	// Hidden is the default whenever a session is joined; the branch seeds the log so the counters
@@ -527,7 +518,7 @@ export default function focusMode(pi: ExtensionAPI): void {
 	// Fires on reload and session replacement so the old instance's tickers and panel go away.
 	pi.on("session_shutdown", () => {
 		tickers.stopAll();
-		closePanel?.();
+		panelSlot.close();
 	});
 
 	pi.registerCommand("focus", {

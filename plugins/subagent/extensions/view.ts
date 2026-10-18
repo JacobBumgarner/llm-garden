@@ -1,6 +1,6 @@
 /**
  * Live view: the `subagent:live` event that publishes the running runs, the
- * `/subagents` overlay (drawn inside a box border) that lists every run of the
+ * `/subagents` overlay (the shared overlay draws its frame) that lists every run of the
  * session, running runs above finished ones under headers that always draw,
  * scrolling the list to fit the height pi gives the overlay, with keys to
  * stop, steer, or answer the selected one, or open its actions panel (the
@@ -12,25 +12,17 @@
  * `/subagents stop`, the overlay `s` key, and a double Esc, which arrives as
  * the `subagent:stop-all` event. The `alt+a` shortcut and bare `/subagents`
  * toggle the overlay, the `subagent:open` event only opens it, and a click
- * that moves focus out of the box closes it. Dialogs and the overlay draw in
+ * outside the box closes it. Dialogs and the overlay draw in
  * the terminal UI only, because RPC mode forwards every dialog to the parent.
  * The overlay component takes its dependencies as parameters, so its key
  * handling runs without a terminal.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	matchesKey,
-	type OverlayHandle,
-	sliceByColumn,
-	stripTerminalSequences,
-	truncateToWidth,
-	type TuiMouseEvent,
-	type TuiMouseEventResult,
-	visibleWidth,
-} from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { matchesKey, sliceByColumn, stripTerminalSequences, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { clamp } from "../../shared/clamp.ts";
 import { CopyFeedback } from "../../shared/copy-feedback.ts";
+import { openOverlay, OverlaySlot } from "../../shared/overlay.ts";
 import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import type { AskQuestion } from "../../ask/api.ts";
 import { ActionLog, ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/api.ts";
@@ -51,19 +43,15 @@ export const OPEN_EVENT = "subagent:open";
 export const STOP_ALL_EVENT = "subagent:stop-all";
 export const NOTE_MESSAGE_TYPE = "subagent-note";
 export const REFRESH_MS = 5000;
+const ACTIONS_REFRESH_MS = 1000;
 export const TOGGLE_KEY = "alt+a";
 const OVERLAY_TITLE = " subagents ";
-const BOX_FRAME = 4;
 const ROW_INDENT = 2;
 const OVERLAY_HEIGHT_FRACTION = 0.6;
 const BOX_EDGES = 2;
-/** Lines the box frame adds above the view's own lines, which mouse rows arrive relative to. */
-const BOX_TOP = 1;
 /** The leading blank, the blank above the help line, and the help line. */
 const FIXED_LINES = 3;
 const HELP_LINE = "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close";
-/** Columns the box frame adds left of the view's own lines: the border and one space. */
-const BOX_LEFT = 2;
 /** Columns one ← or → key (or one shift+wheel tick) pans, matching the actions panel. */
 export const PAN_STEP = 8;
 
@@ -112,7 +100,7 @@ export function createLiveView(
 	};
 	const stopAll = createStopAllHandler(() => registry);
 	const unsubscribe = registry.on("change", publish);
-	const unsubscribeOpen = pi.events.on(OPEN_EVENT, inTui((ctx) => openOverlay(pi, registry, ctx)));
+	const unsubscribeOpen = pi.events.on(OPEN_EVENT, inTui((ctx) => openRunList(pi, registry, ctx)));
 	const unsubscribeStopAll = pi.events.on(STOP_ALL_EVENT, inTui(stopAll));
 	publish();
 	return () => {
@@ -126,24 +114,6 @@ export function createLiveView(
 /** Return the lines left for list entries: the overlay's share of `rows`, minus the box edges, the fixed lines, and `noticeLines`. */
 export function entryCapacity(rows: number, noticeLines: number): number {
 	return Math.floor(rows * OVERLAY_HEIGHT_FRACTION) - BOX_EDGES - FIXED_LINES - noticeLines;
-}
-
-/** Return the columns left for content inside a box of `width`: the frame takes two columns a side. */
-export function boxInnerWidth(width: number): number {
-	return Math.max(width - BOX_FRAME, 1);
-}
-
-/**
- * Draw `inner` lines inside a box whose top edge carries `title`. Each line
- * truncates to the inner width and pads to it. `border` paints the frame.
- */
-export function boxLines(inner: string[], width: number, title: string, border: (text: string) => string): string[] {
-	const edge = Math.max(width - 2, 0);
-	const titleText = truncateToWidth(title, edge, "");
-	const top = `┌${titleText}${"─".repeat(edge - visibleWidth(titleText))}┐`;
-	const bottom = `└${"─".repeat(edge)}┘`;
-	const rows = inner.map((line) => `${border("│")} ${truncateToWidth(line, boxInnerWidth(width), "…", true)} ${border("│")}`);
-	return [border(top), ...rows, border(bottom)];
 }
 
 /** The dialogs the overlay opens. `ctx.ui` satisfies it. */
@@ -200,8 +170,7 @@ type RunAction = (run: Run) => Promise<void>;
  * Rows wider than the overlay pan sideways with ←/→ or shift+wheel, by
  * `PAN_STEP` columns, up to the widest row's end; `0` pans back. The help
  * line reports the pan while one is in effect. Mouse rows arrive relative to
- * the boxed overlay, so a press on a run row (one line below its index in
- * `render`) selects the run, and a left click on one opens its actions panel.
+ * the text area, so a press on the run row drawn on line `y` of `render` selects the run, and a left click on one opens its actions panel.
  * A drag from a press highlights the text it covers in inverse video and
  * copies it on release. The help line reads `copied` for a moment after, as
  * in the actions panel. The highlight stays until the next press or key.
@@ -215,7 +184,7 @@ export class RunListView {
 	/** The run drawn on each line of the last render, by line index, with undefined for the other lines. */
 	private lineRuns: (Run | undefined)[] = [];
 	/** The lines of the last render, unstyled, for mapping the pointer to text. */
-	private painted: PaintedText = { lines: [], x: BOX_LEFT, y: BOX_TOP, width: 0, height: 0, top: 0, pan: 0 };
+	private painted: PaintedText = { lines: [], x: 0, y: 0, width: 0, height: 0, top: 0, pan: 0 };
 	private readonly selection = new TextSelection();
 	private readonly feedback: CopyFeedback;
 	private readonly deps: RunListDeps;
@@ -298,7 +267,7 @@ export class RunListView {
 		if (view.below > 0) rows.push(this.dimLine(`↓ ${view.below} more`));
 		this.lineRuns = [undefined, ...rowRuns];
 		const lines = ["", ...rows, ...notice, "", this.statusLine()];
-		this.painted = { lines: lines.map(stripTerminalSequences), x: BOX_LEFT, y: BOX_TOP, width, height: lines.length, top: 0, pan: 0 };
+		this.painted = { lines: lines.map(stripTerminalSequences), x: 0, y: 0, width, height: lines.length, top: 0, pan: 0 };
 		return lines.map((line, index) => highlightSelection(line, index, width, this.selection.current, this.deps.inverse));
 	}
 
@@ -394,7 +363,7 @@ export class RunListView {
 
 	/** The selection index of the run drawn on boxed line `y` of the last render, if that line holds one. */
 	private runIndexAt(y: number): number | undefined {
-		const run = this.lineRuns[y - BOX_TOP];
+		const run = this.lineRuns[y];
 		if (!run) return undefined;
 		const index = this.runs().indexOf(run);
 		return index === -1 ? undefined : index;
@@ -518,14 +487,19 @@ async function openActionsPanel(ctx: ExtensionContext, registry: ViewRegistry, r
 		}
 	};
 	sync();
-	await ctx.ui.custom<void>(
-		(tui, theme, _keybindings, done) => {
+	let panel: ActionsPanel | undefined;
+	await openOverlay(ctx.ui, {
+		options: { anchor: "center", width: PANEL_WIDTH, minWidth: PANEL_MIN_WIDTH },
+		title: () => panel?.heading() ?? "",
+		outsideClick: "close",
+		refreshMs: ACTIONS_REFRESH_MS,
+		build: (host, tui, theme) => {
 			const unsubscribe = registry.on("change", (changed) => {
 				if (changed.id !== run.id) return;
 				sync();
 				tui.requestRender();
 			});
-			const panel = new ActionsPanel({
+			const built = new ActionsPanel({
 				entries: () => log.visible(),
 				groups: () => log.groups(),
 				label: (group) => log.label(group),
@@ -534,25 +508,25 @@ async function openActionsPanel(ctx: ExtensionContext, registry: ViewRegistry, r
 				requestRender: () => tui.requestRender(),
 				theme,
 				terminal: tui.terminal,
-				done: () => done(),
+				done: () => host.close(),
 			});
+			panel = built;
 			return {
-				render: (width) => panel.render(width),
-				handleInput: (data) => panel.handleInput(data),
-				handleMouse: (event) => panel.handleMouse(event),
-				invalidate: () => panel.invalidate(),
+				render: (width) => built.render(width),
+				handleInput: (data) => built.handleInput(data),
+				handleMouse: (event) => built.handleMouse(event),
+				invalidate: () => built.invalidate(),
 				dispose: () => {
 					unsubscribe();
-					panel.dispose();
+					built.dispose();
 				},
 			};
 		},
-		{ overlay: true, overlayOptions: { anchor: "center", width: PANEL_WIDTH, minWidth: PANEL_MIN_WIDTH } },
-	);
+	});
 }
 
-/** The open overlay, kept so a second request closes it and a badge click does not stack another. */
-let activeOverlay: { close: () => void } | undefined;
+/** The open run list, kept so a second request closes it and a badge click does not stack another. */
+const runListSlot = new OverlaySlot();
 
 /**
  * Register the `/subagents` command, whose `stop` argument confirms and stops
@@ -570,10 +544,10 @@ export function registerViewControls(pi: ExtensionAPI, getRegistry: () => ViewRe
 
 	const toggle = async (ctx: ExtensionContext): Promise<void> => {
 		if (ctx.mode !== "tui") return ctx.ui.notify("/subagents needs the terminal UI", "warning");
-		if (activeOverlay) return activeOverlay.close();
+		if (runListSlot.active) return runListSlot.close();
 		const registry = getRegistry();
 		if (!registry) return ctx.ui.notify("No subagent session is active", "warning");
-		await openOverlay(pi, registry, ctx);
+		await openRunList(pi, registry, ctx);
 	};
 
 	pi.registerCommand("subagents", {
@@ -590,103 +564,55 @@ export function registerViewControls(pi: ExtensionAPI, getRegistry: () => ViewRe
 }
 
 /**
- * Track whether an overlay has lost focus to another component, such as the
- * editor under a click outside the box. Focus counts as lost only after the
- * overlay has been seen focused once, and never while it is hidden behind a
- * dialog it opened.
- */
-export function createBlurWatch(): { lost: (handle: Pick<OverlayHandle, "isFocused" | "isHidden">) => boolean } {
-	let sawFocus = false;
-	return {
-		lost(handle) {
-			if (handle.isHidden()) return false;
-			if (handle.isFocused()) {
-				sawFocus = true;
-				return false;
-			}
-			return sawFocus;
-		},
-	};
-}
-
-/**
  * Open the run list unless one is already open. Notices draw inside the
  * overlay, because a notification in the chat can sit behind it. Dialogs
  * opened from the overlay hide it first, because pi returns focus to the
  * editor when a dialog closes, and show it again after, which hands the
- * overlay its focus back. A render that finds focus moved elsewhere closes
- * the overlay, since pi sends no outside-click event to it.
+ * overlay its focus back. A press outside the overlay closes it.
  */
-async function openOverlay(pi: Pick<ExtensionAPI, "sendMessage">, registry: ViewRegistry, ctx: ExtensionContext): Promise<void> {
-	if (activeOverlay) return;
-	let handle: OverlayHandle | undefined;
+async function openRunList(pi: Pick<ExtensionAPI, "sendMessage">, registry: ViewRegistry, ctx: ExtensionContext): Promise<void> {
 	let view: RunListView | undefined;
-	let finish: (() => void) | undefined;
-	const self = { close: () => finish?.() };
-	activeOverlay = self;
+	let paint: Theme | undefined;
 	const dialogs: ViewDialogs = {
 		confirm: (title, message) => ctx.ui.confirm(title, message),
 		input: (title, placeholder) => ctx.ui.input(title, placeholder),
 		notify: (message) => view?.showNotice(message),
 	};
-	try {
-		await ctx.ui.custom<void>(
-			(tui, theme, _keybindings, done) => {
-				const created = new RunListView({
-					registry,
-					dialogs,
-					postNote: (content) =>
-						pi.sendMessage({ customType: NOTE_MESSAGE_TYPE, content, display: true }, { deliverAs: "nextTurn" }),
-					close: () => done(),
-					requestRender: () => tui.requestRender(),
-					suspend: async (dialog) => {
-						handle?.setHidden(true);
-						try {
-							return await dialog();
-						} finally {
-							handle?.setHidden(false);
-							handle?.focus();
-						}
-					},
-					showActions: (run) => openActionsPanel(ctx, registry, run),
-					now: Date.now,
-					rows: () => tui.terminal.rows,
-					highlight: (text) => theme.fg("accent", text),
-					paint: (state, text) => theme.fg(overlayStateColor(state), text),
-					dim: (text) => theme.fg("dim", text),
-					success: (text) => theme.fg("success", text),
-					inverse: (text) => theme.inverse(text),
-					terminal: tui.terminal,
-				});
-				view = created;
-				finish = () => done();
-				const refresh = setInterval(() => tui.requestRender(), REFRESH_MS);
-				refresh.unref?.();
-				const blur = createBlurWatch();
-				return {
-					render: (width) => {
-						if (handle && blur.lost(handle)) queueMicrotask(() => done());
-						return boxLines(created.render(boxInnerWidth(width)), width, OVERLAY_TITLE, (text) => theme.fg("border", text));
-					},
-					handleInput: (data) => created.handleInput(data),
-					handleMouse: (event) => created.handleMouse(event),
-					invalidate: () => {},
-					dispose: () => {
-						clearInterval(refresh);
-						view = undefined;
-						created.dispose();
-					},
-				};
-			},
-			{
-				overlay: true,
-				overlayOptions: { anchor: "center", width: "80%", minWidth: 60, maxHeight: "60%" },
-				onHandle: (value) => {
-					handle = value;
+	await runListSlot.open(ctx.ui, {
+		options: { anchor: "center", width: "80%", minWidth: 60, maxHeight: "60%" },
+		title: () => paint?.bold(OVERLAY_TITLE) ?? OVERLAY_TITLE,
+		outsideClick: "close",
+		refreshMs: REFRESH_MS,
+		build: (host, tui, theme) => {
+			paint = theme;
+			const created = new RunListView({
+				registry,
+				dialogs,
+				postNote: (content) => pi.sendMessage({ customType: NOTE_MESSAGE_TYPE, content, display: true }, { deliverAs: "nextTurn" }),
+				close: () => host.close(),
+				requestRender: () => host.requestRender(),
+				suspend: (dialog) => host.suspend(dialog),
+				showActions: (run) => openActionsPanel(ctx, registry, run),
+				now: Date.now,
+				rows: () => tui.terminal.rows,
+				highlight: (text) => theme.fg("accent", text),
+				paint: (state, text) => theme.fg(overlayStateColor(state), text),
+				dim: (text) => theme.fg("dim", text),
+				success: (text) => theme.fg("success", text),
+				inverse: (text) => theme.inverse(text),
+				terminal: tui.terminal,
+			});
+			view = created;
+			return {
+				render: (width) => created.render(width),
+				handleInput: (data) => created.handleInput(data),
+				handleMouse: (event) => created.handleMouse(event),
+				invalidate: () => {},
+				dispose: () => {
+					view = undefined;
+					created.dispose();
 				},
-			},
-		);
-	} finally {
-		if (activeOverlay === self) activeOverlay = undefined;
-	}
+			};
+		},
+	});
 }

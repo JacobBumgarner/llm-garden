@@ -159,68 +159,72 @@ describe("ActionsPanel", () => {
 		return { type, button: "left" as const, x, y, screenX: x, screenY: y, width: 0, height: 0, shift: false, alt: false, ctrl: false, ...extra };
 	}
 
-	it("fills the terminal height with a framed view that follows the end", () => {
+	it("fills the terminal height inside the frame with a view that follows the end", () => {
 		const entries = Array.from({ length: 6 }, (_, i) => entry({ id: `${i}`, name: "read", args: { path: `f${i}` } }));
 		const { component } = panel(entries, 6);
-		const lines = component.render(30);
+		const lines = component.render(28);
 		component.dispose();
-		assert.equal(lines.length, 6);
-		assert.ok(lines[0]!.startsWith("╭"));
-		assert.ok(lines.at(-1)!.startsWith("╰"));
-		assert.ok(lines[1]!.includes("read f4"), lines[1]);
-		assert.ok(lines[2]!.includes("read f5"), lines[2]);
-		assert.equal(lines[3]!.trim(), "│                            │".trim(), lines[3]);
-		assert.ok(lines[4]!.includes("↑↓ scroll"), lines[4]);
-		assert.match(lines.at(-1)!, /^╰─+╯$/, lines.at(-1));
-		for (const line of lines) assert.equal([...line].length, 30, line);
+		assert.equal(lines.length, 4);
+		assert.ok(lines[0]!.includes("read f4"), lines[0]);
+		assert.ok(lines[1]!.includes("read f5"), lines[1]);
+		assert.equal(lines[2]!.trim(), "", lines[2]);
+		assert.ok(lines[3]!.includes("↑↓ scroll"), lines[3]);
+		assert.ok(lines.every((line) => !/[╭╮╰╯]/.test(line)));
+	});
+
+	it("titles the frame with the entry count and the running ones", () => {
+		const { component } = panel([entry({ id: "a", name: "read", result: { content: [] } as never }), entry({ id: "b", name: "read" })], 6);
+		const title = component.heading();
+		component.dispose();
+		assert.match(title, /^ actions /);
+		assert.match(title, /2 · 1 running $/);
 	});
 
 	it("scrolls up and stops following, then End pins again", () => {
 		const entries = Array.from({ length: 6 }, (_, i) => entry({ id: `${i}`, name: "read", args: { path: `f${i}` } }));
 		const { component } = panel(entries, 6);
-		component.render(30);
+		component.render(28);
 		component.handleInput("up");
-		assert.ok(component.render(30)[1]!.includes("read f3"));
+		assert.ok(component.render(28)[0]!.includes("read f3"));
 		component.handleInput("end");
-		assert.ok(component.render(30)[1]!.includes("read f4"));
+		assert.ok(component.render(28)[0]!.includes("read f4"));
 		component.dispose();
 	});
 
 	it("ignores g and G", () => {
 		const entries = Array.from({ length: 6 }, (_, i) => entry({ id: `${i}`, name: "read", args: { path: `f${i}` } }));
 		const { component } = panel(entries, 6);
-		component.render(30);
+		component.render(28);
 		component.handleInput("up");
 		component.handleInput("g");
-		assert.ok(component.render(30)[1]!.includes("read f3"), "g does not jump to the top");
+		assert.ok(component.render(28)[0]!.includes("read f3"), "g does not jump to the top");
 		component.handleInput("G");
-		assert.ok(component.render(30)[1]!.includes("read f3"), "G does not jump to the end");
+		assert.ok(component.render(28)[0]!.includes("read f3"), "G does not jump to the end");
 		component.dispose();
 	});
 
 	it("wraps a long command across rows instead of clipping it", () => {
 		const entries = [entry({ id: "a", name: "bash", args: { command: "echo " + "x".repeat(60) } })];
 		const { component } = panel(entries, 8);
-		const lines = component.render(40);
+		const lines = component.render(36);
 		component.dispose();
-		assert.ok(lines[2]!.includes("$ echo"), lines[2]);
-		assert.ok(lines[3]!.startsWith("│   x"), lines[3]);
-		assert.ok(lines[4]!.startsWith("│   x"), lines[4]);
-		const shown = lines.slice(2, 5).join("").match(/x/g)!.length;
+		assert.ok(lines[1]!.includes("$ echo"), lines[1]);
+		assert.ok(lines[2]!.startsWith("  x"), lines[2]);
+		assert.ok(lines[3]!.startsWith("  x"), lines[3]);
+		const shown = lines.slice(1, 4).join("").match(/x/g)!.length;
 		assert.equal(shown, 60);
-		for (const line of lines) assert.equal([...line].length, 40, line);
 	});
 
 	it("selects by drag inside the body, highlights it, and copies on release", () => {
 		const entries = [entry({ id: "a", name: "read", args: { path: "first" } }), entry({ id: "b", name: "read", args: { path: "second" } })];
 		const { component, written } = panel(entries, 7);
 		component.render(40);
-		assert.deepEqual(component.handleMouse(mouse("press", 2, 2)), { capture: true, handled: true, render: true });
-		component.handleMouse(mouse("drag", 9, 3));
+		assert.deepEqual(component.handleMouse(mouse("press", 0, 1)), { capture: true, handled: true, render: true });
+		component.handleMouse(mouse("drag", 7, 2));
 		const lines = component.render(40);
-		assert.ok(lines[2]!.includes("[○ … read first"), lines[2]);
-		assert.ok(lines[3]!.includes("[○ … read"), lines[3]);
-		component.handleMouse(mouse("release", 9, 3));
+		assert.ok(lines[1]!.includes("[○ … read first"), lines[1]);
+		assert.ok(lines[2]!.includes("[○ … read"), lines[2]);
+		component.handleMouse(mouse("release", 7, 2));
 		component.dispose();
 		assert.equal(written.length, 1);
 		const payload = written[0]!.match(/52;c;([^\x07]+)/)![1]!;
@@ -230,10 +234,10 @@ describe("ActionsPanel", () => {
 	it("copies a whole line on double click", () => {
 		const { component, written } = panel([entry({ id: "a", name: "read", args: { path: "f.ts" } })], 6);
 		component.render(40);
-		component.handleMouse(mouse("click", 5, 2, { clickCount: 2 }));
+		component.handleMouse(mouse("click", 3, 1, { clickCount: 2 }));
 		const lines = component.render(40);
 		component.dispose();
-		assert.ok(lines[2]!.includes("[○ … read f.ts"), lines[2]);
+		assert.ok(lines[1]!.includes("[○ … read f.ts"), lines[1]);
 		const payload = written[0]!.match(/52;c;([^\x07]+)/)![1]!;
 		assert.equal(Buffer.from(payload, "base64").toString("utf8"), "○ … read f.ts");
 	});
@@ -245,7 +249,7 @@ describe("ActionsPanel", () => {
 		component.handleMouse(mouse("wheel", 5, 2, { wheelDelta: -1 }));
 		const lines = component.render(40);
 		component.dispose();
-		assert.ok(lines[1]!.includes("read f1"), lines[1]);
+		assert.ok(lines[0]!.includes("read f1"), lines[0]);
 	});
 
 	it("takes its share of the terminal height, floored", () => {
@@ -254,10 +258,10 @@ describe("ActionsPanel", () => {
 		assert.equal(panelRows(9), 8);
 	});
 
-	it("ignores a press on the frame", () => {
+	it("refuses a press outside the text area but swallows it", () => {
 		const { component } = panel([entry({ id: "a", name: "read" })], 6);
 		component.render(40);
-		assert.deepEqual(component.handleMouse(mouse("press", 0, 0)), { capture: false, handled: true, render: true });
+		assert.deepEqual(component.handleMouse(mouse("press", -1, -1)), { capture: false, handled: true, render: true });
 		component.dispose();
 	});
 

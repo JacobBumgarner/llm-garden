@@ -10,12 +10,12 @@
  * transcript's user-message colors, and a turn without calls says so under its header. Within a
  * turn, a dashed rule separates steps: the runs of calls the agent made between pieces of text.
  * Opened with a target step or turn, the panel scrolls so that step or turn's first line is at the
- * top instead of following the end. Esc, q, space, or the opening shortcut closes it; ↑/↓,
- * PgUp/PgDn, Home, End, and the wheel scroll. A drag over the body selects text, copies it to
- * the clipboard on release, and leaves it highlighted until the next press or key; a double click
- * copies the whole line. A status row above the bottom rule carries the key hint, and reads
- * "copied" for a moment after a copy. A timer redraws the panel each second so running durations
- * tick.
+ * top instead of following the end. The overlay wrapper draws the frame and redraws each second so
+ * running durations advance, so the panel draws only its text area. Esc, q, space, or the opening
+ * shortcut closes it; ↑/↓, PgUp/PgDn, Home, End, and the wheel scroll. A drag over the body selects
+ * text, copies it to the clipboard on release, and leaves it highlighted until the next press or
+ * key; a double click copies the whole line. The last row carries the key hint, and reads "copied"
+ * for a moment after a copy.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -47,11 +47,8 @@ const NO_ACTIONS = "(no actions)";
 const STEP_RULE = "┈┈┈┈┈┈┈┈";
 /** Columns before a group label, matching the transcript's user message padding. */
 const HEADER_PAD = " ";
-const TICK_MS = 1000;
 /** Entries beyond this many are dropped from the top of the view. */
 const MAX_ENTRIES = 500;
-/** Columns of frame around the body: a border and a space on each side. */
-const FRAME_X = 2;
 /** Below this many columns of text after the prefix, a line is clipped rather than wrapped. */
 const WRAP_MIN = 10;
 /** Blank rows kept below the last body line so it does not sit on the status row. */
@@ -214,11 +211,10 @@ export class ActionsPanel implements Component {
 	private readonly viewport = new Viewport();
 	/** Where to scroll on the next paint, cleared once applied. */
 	private target: PanelTarget | undefined;
-	private timer: ReturnType<typeof setInterval> | undefined;
 	private readonly selection = new TextSelection();
 	private readonly feedback: CopyFeedback;
 	/** The body as last painted, unstyled, for mapping the pointer to text. */
-	private painted: PaintedText = { lines: [], x: FRAME_X, y: 1, width: 0, height: 0, top: 0, pan: 0 };
+	private painted: PaintedText = { lines: [], x: 0, y: 0, width: 0, height: 0, top: 0, pan: 0 };
 
 	constructor(options: {
 		entries: () => ActionEntry[];
@@ -245,15 +241,11 @@ export class ActionsPanel implements Component {
 		this.theme = options.theme;
 		this.done = options.done;
 		this.feedback = new CopyFeedback({ requestRender: options.requestRender, terminal: options.terminal });
-		this.timer = setInterval(() => this.requestRender(), TICK_MS);
-		this.timer.unref?.();
 	}
 
 	invalidate(): void {}
 
 	dispose(): void {
-		if (this.timer) clearInterval(this.timer);
-		this.timer = undefined;
 		this.feedback.dispose();
 	}
 
@@ -294,8 +286,7 @@ export class ActionsPanel implements Component {
 
 	render(width: number): string[] {
 		const th = this.theme;
-		const inner = Math.max(1, width - 2);
-		const content = Math.max(1, inner - FRAME_X);
+		const content = Math.max(1, width);
 		const height = this.viewportHeight();
 		const entries = this.entries();
 		const now = Date.now();
@@ -311,32 +302,30 @@ export class ActionsPanel implements Component {
 			this.target = undefined;
 		}
 		const top = this.viewport.layout(body.length, height);
-		this.painted = { lines: body.map(stripTerminalSequences), x: FRAME_X, y: 1, width: content, height, top, pan: 0 };
+		this.painted = { lines: body.map(stripTerminalSequences), x: 0, y: 0, width: content, height, top, pan: 0 };
 		const view: string[] = [];
 		for (let row = 0; row < height; row++) {
 			const line = top + row;
 			view.push(highlightSelection(sliceByColumn(body[line] ?? "", 0, content), line, content, this.selection.current, (t) => th.inverse(t)));
 		}
 
-		const row = (text: string): string => {
-			const pad = " ".repeat(Math.max(0, inner - 1 - visibleWidth(text)));
-			return th.fg("border", "│") + " " + text + pad + th.fg("border", "│");
-		};
-		const rule = (label: string, left: string, right: string): string => {
-			label = truncateToWidth(label, Math.max(0, inner - 1), "");
-			const fill = "─".repeat(Math.max(0, inner - visibleWidth(label) - 1));
-			return th.fg("border", `${left}─`) + label + th.fg("border", `${fill}${right}`);
-		};
-		const running = entries.filter((entry) => entry.result === undefined || entry.result.partial === true).length;
-		const title =
-			th.bold(" actions ") +
-			(this.title ? th.fg("muted", `${this.title} `) : "") +
-			th.fg("dim", `${entries.length}${running ? ` · ${running} running` : ""} `);
 		const status = this.feedback.active() ? th.fg("success", "copied") : th.fg("dim", "esc close · ↑↓ scroll");
-		return [rule(title, "╭", "╮"), ...view.map(row), row(status), rule("", "╰", "╯")];
+		return [...view, status];
 	}
 
-	/** Rows left for entries inside the top rule, the status row, and the bottom rule. */
+	/** The frame's title: a bold `actions`, whose actions these are, and the entry count with any running. */
+	heading(): string {
+		const th = this.theme;
+		const entries = this.entries();
+		const running = entries.filter((entry) => entry.result === undefined || entry.result.partial === true).length;
+		return (
+			th.bold(" actions ") +
+			(this.title ? th.fg("muted", `${this.title} `) : "") +
+			th.fg("dim", `${entries.length}${running ? ` · ${running} running` : ""} `)
+		);
+	}
+
+	/** Rows left for entries inside the frame's two edges and the status row. */
 	private viewportHeight(): number {
 		return Math.max(1, panelRows(this.rows()) - 3);
 	}

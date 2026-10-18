@@ -2,10 +2,9 @@
 
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { OverlayHandle } from "@earendil-works/pi-tui";
+import { type ExtensionAPI, type ExtensionContext, getAgentDir, type Theme } from "@earendil-works/pi-coding-agent";
 import { AsideChild } from "./child.ts";
-import { watchOutsideClicks } from "../../shared/outside-click.ts";
+import { type OverlayHost, OverlaySlot } from "../../shared/overlay.ts";
 import { modelAlias } from "../../shared/model-alias.ts";
 import { buildFeed, type FeedEntry, type Meta, nextSessionId, readMeta, asideSessionId, writeMeta } from "./feed.ts";
 import { OVERLAY_OPTIONS, type PanelBackend, type PanelEvent, type PanelListener, AsidePanel, TOGGLE_KEY } from "./panel.ts";
@@ -17,10 +16,8 @@ function sessionDir(): string {
 /** One aside: the side agent for one main session, and the panel over it. */
 class Aside implements PanelBackend {
 	readonly sessionId: string;
-	handle?: OverlayHandle;
-	/** Stops the outside-click watch on the raw input while the panel exists. */
-	unwatch?: () => void;
-	close?: () => void;
+	/** The open panel, if any. */
+	readonly slot = new OverlaySlot();
 	private readonly pi: ExtensionAPI;
 	private readonly dir = sessionDir();
 	private readonly listeners = new Set<PanelListener>();
@@ -89,7 +86,7 @@ class Aside implements PanelBackend {
 	/** Stop the side agent and point the sidecar at a new session with no cursor. The old session file stays on disk. */
 	async startNew(): Promise<void> {
 		const next = nextSessionId(this.sessionId, this.currentSession());
-		this.close?.();
+		this.slot.close();
 		await this.stop();
 		this.child = undefined;
 		this.attached = undefined;
@@ -151,45 +148,27 @@ class Aside implements PanelBackend {
 }
 
 /** Hide a shown panel, or show a hidden one and bring it current, which counts as a panel open. */
-async function toggleHidden(handle: OverlayHandle, t: Aside): Promise<void> {
-	if (!handle.isHidden()) {
-		handle.setHidden(true);
+async function toggleHidden(host: OverlayHost, t: Aside): Promise<void> {
+	if (!host.isHidden()) {
+		host.hide();
 		return;
 	}
-	handle.setHidden(false);
-	handle.focus();
+	host.show();
 	await t.syncName().catch(() => {});
 }
 
 /** Show the panel as an overlay and resolve when it closes. */
 async function openPanel(ctx: ExtensionContext, t: Aside): Promise<void> {
-	try {
-		await ctx.ui.custom<void>(
-			(tui, theme, _kb, done) => {
-				t.close = () => done();
-				return new AsidePanel({
-					tui,
-					theme,
-					backend: t,
-					model: t.modelLabel(),
-					hide: () => t.handle?.setHidden(true),
-				});
-			},
-			{
-				overlay: true,
-				overlayOptions: OVERLAY_OPTIONS,
-				onHandle: (h) => {
-					t.handle = h;
-					t.unwatch = watchOutsideClicks(() => h.getBounds(), () => h.setHidden(true));
-				},
-			},
-		);
-	} finally {
-		t.unwatch?.();
-		t.unwatch = undefined;
-		t.handle = undefined;
-		t.close = undefined;
-	}
+	let paint: Theme | undefined;
+	await t.slot.open(ctx.ui, {
+		options: OVERLAY_OPTIONS,
+		title: () => paint?.bold(" aside ") ?? " aside ",
+		outsideClick: "hide",
+		build: (host, tui, theme) => {
+			paint = theme;
+			return new AsidePanel({ tui, theme, backend: t, model: t.modelLabel(), hide: () => host.hide() });
+		},
+	});
 }
 
 export default function aside(pi: ExtensionAPI): void {
@@ -211,7 +190,7 @@ export default function aside(pi: ExtensionAPI): void {
 	const toggle = async (ctx: ExtensionContext): Promise<void> => {
 		const t = asideFor(ctx);
 		if (!t) return;
-		if (t.handle) await toggleHidden(t.handle, t);
+		if (t.slot.active) await toggleHidden(t.slot.active, t);
 		else await openPanel(ctx, t);
 	};
 
@@ -230,14 +209,14 @@ export default function aside(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		current?.close?.();
+		current?.slot.close();
 		current = new Aside(pi, ctx, ctx.sessionManager.getSessionId());
 	});
 
 	pi.on("session_shutdown", async () => {
 		const t = current;
 		current = undefined;
-		t?.close?.();
+		t?.slot.close();
 		await t?.stop();
 	});
 }

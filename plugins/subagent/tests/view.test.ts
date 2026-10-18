@@ -4,8 +4,6 @@ import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { formatOverlayRow, listNewestFirst, overlayRowWidth } from "../extensions/format.ts";
 import type { Run } from "../extensions/types.ts";
 import {
-	boxLines,
-	createBlurWatch,
 	createLiveView,
 	createStopAllHandler,
 	entryCapacity,
@@ -260,16 +258,6 @@ test("subagent:stop-all confirms and stops every live run in the terminal UI onl
 	assert.equal(handlers.has("subagent:stop-all"), false);
 });
 
-test("boxLines draws the title in the top edge and fits every row to the width", () => {
-	const lines = boxLines(["short", "x".repeat(80)], 40, " subagents ", (text) => text);
-	assert.equal(lines.length, 4);
-	assert.match(lines[0], /^┌ subagents ─+┐$/);
-	assert.match(lines[3], /^└─+┘$/);
-	for (const line of lines) assert.equal(line.length, 40);
-	assert.match(lines[1], /^│ short {31} │$/);
-	assert.match(lines[2], /^│ x+… │$/);
-});
-
 /** Build an overlay over a fake registry with scripted dialog answers. */
 function setupView() {
 	const registry = new FakeRegistry();
@@ -379,19 +367,6 @@ test("escape closes the overlay", async () => {
 	const { press, closed } = setupView();
 	await press("escape");
 	assert.equal(closed(), 1);
-});
-
-test("the blur watch reports lost focus only after the overlay was focused once and is not hidden", () => {
-	const watch = createBlurWatch();
-	const handle = { focused: false, hidden: false, isFocused: () => handle.focused, isHidden: () => handle.hidden };
-	assert.equal(watch.lost(handle), false, "unfocused before the first focus");
-	handle.focused = true;
-	assert.equal(watch.lost(handle), false);
-	handle.hidden = true;
-	handle.focused = false;
-	assert.equal(watch.lost(handle), false, "hidden behind a dialog");
-	handle.hidden = false;
-	assert.equal(watch.lost(handle), true, "focus moved elsewhere");
 });
 
 test("the toggle chord closes the overlay from inside, where the shortcut router cannot see it", async () => {
@@ -714,23 +689,23 @@ test("the wheel moves the selection a run a tick and shift+wheel pans", () => {
 
 test("a press on a run row selects it and a left click opens its actions; other rows swallow the click", async () => {
 	const { view, log, press } = setupView();
-	// setupView lists new, ask, old under RUNNING; the box border puts view line 0 at y=1, so
-	// the header is y=2 and the third run is y=5.
+	// setupView lists new, ask, old under RUNNING; mouse rows are view lines, so the header is
+	// y=1 and the third run is y=4.
 	const mouse = (type: TuiMouseEvent["type"], y: number, button: TuiMouseEvent["button"] = "left") =>
 		view.handleMouse({ ...({} as TuiMouseEvent), type, button, x: 4, y, shift: false, alt: false, ctrl: false });
 	view.render(60);
-	assert.deepEqual(mouse("press", 5), { capture: true, handled: true, render: true });
-	mouse("release", 5);
+	assert.deepEqual(mouse("press", 4), { capture: true, handled: true, render: true });
+	mouse("release", 4);
 	assert.match(view.render(60)[4], /^ {2}\[> ▶ glm old/);
 	assert.deepEqual(log.actions, []);
-	mouse("click", 5);
+	mouse("click", 4);
 	await view.settled();
 	assert.deepEqual(log.actions, ["old"]);
-	mouse("click", 4, "right");
+	mouse("click", 3, "right");
 	await view.settled();
 	assert.deepEqual(log.actions, ["old"], "a right click only selects");
 	assert.match(view.render(60)[3], /^ {2}\[> ⏸ glm ask/);
-	assert.deepEqual(mouse("click", 2), { handled: true }, "a click on the header does nothing and does not reach the editor");
+	assert.deepEqual(mouse("click", 1), { handled: true }, "a click on the header does nothing and does not reach the editor");
 	await press("escape");
 });
 
@@ -739,23 +714,23 @@ test("a drag highlights the text it covers in inverse video and copies it on rel
 	const mouse = (type: TuiMouseEvent["type"], x: number, y: number) =>
 		view.handleMouse({ ...({} as TuiMouseEvent), type, button: "left", x, y, shift: false, alt: false, ctrl: false });
 	view.render(60);
-	// The box frame is one row above and two columns left of the view's lines, so (x=2, y=2) is view line 1, col 0: the RUNNING header.
-	mouse("press", 2, 2);
-	mouse("drag", 8, 2);
+	// Mouse coordinates are the view's own, so (x=0, y=1) is view line 1, col 0: the RUNNING header.
+	mouse("press", 0, 1);
+	mouse("drag", 6, 1);
 	assert.equal(view.render(60)[1], `<  RUNNI>NG${" ".repeat(60 - "  RUNNING".length)}`);
-	mouse("release", 8, 2);
+	mouse("release", 6, 1);
 	assert.deepEqual(log.copies, ["  RUNNI"]);
 	assert.equal(view.render(60).at(-1), "(copied)", "the help line reads copied");
 	assert.deepEqual(log.actions, [], "a drag does not open the actions panel");
 	// A drag across lines copies each line, trimmed, joined by newlines.
-	mouse("press", 2, 2);
-	mouse("drag", 10, 3);
-	mouse("release", 10, 3);
+	mouse("press", 0, 1);
+	mouse("drag", 8, 2);
+	mouse("release", 8, 2);
 	// The test's highlight wraps in brackets rather than escape codes, so the bracket survives the strip.
 	assert.equal(log.copies[1], "  RUNNING\n  [> ▶ gl");
 	// A press that never moves leaves no highlight behind.
-	mouse("press", 2, 2);
-	mouse("release", 2, 2);
+	mouse("press", 0, 1);
+	mouse("release", 0, 1);
 	assert.equal(view.render(60)[1], "  RUNNING");
 	await press("escape");
 });

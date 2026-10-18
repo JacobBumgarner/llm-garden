@@ -1,5 +1,5 @@
 /**
- * The aside overlay: a bordered box with a scrolling transcript, an input
+ * The aside panel: a scrolling transcript, an input
  * line, and a status line showing the model and the hide key, or `copied` for
  * a moment after a copy. It talks to the side agent through a `PanelBackend`,
  * so tests run it with a fake.
@@ -19,7 +19,6 @@ import {
 	type TUI,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
-	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { CopyFeedback } from "../../shared/copy-feedback.ts";
@@ -41,11 +40,9 @@ export const OVERLAY_OPTIONS = {
 	margin: { top: 1, right: 1 },
 } as const;
 
-/** Rows taken by the top rule, the status line, and the bottom rule. */
+/** Rows taken by the frame's top and bottom edges and the status line. */
 const FRAME_ROWS = 3;
 const MIN_BODY_ROWS = 3;
-/** Columns left of the transcript text: the border and one space. */
-const FRAME_X = 2;
 const TRANSCRIPT_OPEN = "<main-transcript>";
 const TRANSCRIPT_CLOSE = "</main-transcript>";
 const PRIMARY_ARGS = ["path", "pattern", "query", "command", "url"];
@@ -150,7 +147,7 @@ export class AsidePanel implements Component, Focusable {
 	private readonly selection = new TextSelection();
 	private readonly feedback: CopyFeedback;
 	/** The transcript as last painted, unstyled, for mapping the pointer to text. */
-	private painted: PaintedText = { lines: [], x: FRAME_X, y: 1, width: 0, height: 0, top: 0, pan: 0 };
+	private painted: PaintedText = { lines: [], x: 0, y: 0, width: 0, height: 0, top: 0, pan: 0 };
 	private _focused = false;
 
 	constructor(options: PanelOptions) {
@@ -214,14 +211,14 @@ export class AsidePanel implements Component, Focusable {
 
 	render(width: number): string[] {
 		const theme = this.o.theme;
-		const inner = Math.max(width - 4, 1);
+		const inner = Math.max(width, 1);
 		const editorLines = this.editor.render(inner);
 		const total = Math.floor((this.o.tui.terminal.rows || 24) * HEIGHT_RATIO);
 		this.bodyRows = Math.max(total - FRAME_ROWS - editorLines.length, MIN_BODY_ROWS);
 
 		const lines = this.transcriptLines(inner);
 		const top = this.viewport.layout(lines.length, this.bodyRows);
-		this.painted = { lines: lines.map(stripTerminalSequences), x: FRAME_X, y: 1, width: inner, height: this.bodyRows, top, pan: 0 };
+		this.painted = { lines: lines.map(stripTerminalSequences), x: 0, y: 0, width: inner, height: this.bodyRows, top, pan: 0 };
 		const body = lines
 			.slice(top, top + this.bodyRows)
 			.map((l, i) => highlightSelection(sliceByColumn(l, 0, inner), top + i, inner, this.selection.current, (s) => theme.inverse(s)));
@@ -231,7 +228,7 @@ export class AsidePanel implements Component, Focusable {
 			this.feedback.active()
 				? theme.fg("success", "copied")
 				: theme.fg("dim", `${this.o.model} · esc hide`);
-		return this.frame(width, [...body, ...editorLines, status]);
+		return [...body, ...editorLines, status];
 	}
 
 	invalidate(): void {
@@ -241,17 +238,6 @@ export class AsidePanel implements Component, Focusable {
 	dispose(): void {
 		this.feedback.dispose();
 		this.unsubscribe();
-	}
-
-	/** Draw the rows inside a bordered box titled `aside`, each row cut to the inner width. */
-	private frame(width: number, rows: string[]): string[] {
-		const border = (s: string) => this.o.theme.fg("border", s);
-		const inner = Math.max(width - 4, 1);
-		const edge = Math.max(width - 2, 0);
-		const title = truncateToWidth(" aside ", edge, "");
-		const topRule = `┌${title}${"─".repeat(edge - visibleWidth(title))}┐`;
-		const framed = rows.map((l) => `${border("│")} ${truncateToWidth(l, inner, "…", true)} ${border("│")}`);
-		return [border(topRule), ...framed, border(`└${"─".repeat(edge)}┘`)];
 	}
 
 	private transcriptLines(width: number): string[] {
