@@ -18,9 +18,9 @@ import {
 	RunRegistry,
 	type RunSpec,
 } from "../extensions/registry.ts";
-import type { DelegateExit, PromptDisposition, QueuedInputDisposition } from "../extensions/rpc.ts";
+import type { DelegateExit, PromptDisposition, QueuedInputDisposition } from "../../shared/rpc.ts";
 import { readMeta, writeMeta } from "../extensions/session.ts";
-import { buildChildArgs } from "../extensions/spawn.ts";
+import { buildChildArgs } from "../../shared/spawn.ts";
 
 const AGENT: AgentConfig = {
 	name: "worker",

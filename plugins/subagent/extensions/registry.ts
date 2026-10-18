@@ -16,9 +16,10 @@ import type { AskQuestion } from "../../ask/extensions/types.ts";
 import type { AgentConfig, AgentScope } from "./agents.ts";
 import { labelOrPreview } from "./format.ts";
 import { detectPause } from "./pause.ts";
-import { DelegateClient, type DelegateExit } from "./rpc.ts";
+import { DelegateClient, type DelegateExit } from "../../shared/rpc.ts";
 import { newSessionId, readMeta, writeMeta } from "./session.ts";
-import { buildChildArgs, SUBAGENT_PROTOCOL, writePromptToTempFile } from "./spawn.ts";
+import { buildChildArgs, writePromptToTempFile } from "../../shared/spawn.ts";
+import { SUBAGENT_PROTOCOL } from "./spawn.ts";
 import type { Run, RunClient, UsageStats } from "./types.ts";
 
 export type { Run, RunClient, RunState } from "./types.ts";

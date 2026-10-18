@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DelegateClient } from "../extensions/rpc.ts";
+import { DelegateClient } from "../rpc.ts";
 
 test("a real pi child answers a prompt and settles", { timeout: 120_000 }, async () => {
 	const client = new DelegateClient({

@@ -7,7 +7,7 @@ import {
 	START_DEADLINE_MS,
 	STDERR_TAIL_CHARS,
 	type DelegateChild,
-} from "../extensions/rpc.ts";
+} from "../rpc.ts";
 
 const STDIN_END = "<end>";
 

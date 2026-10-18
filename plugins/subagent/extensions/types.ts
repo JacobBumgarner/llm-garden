@@ -6,7 +6,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import type { AskQuestion } from "../../ask/extensions/types.ts";
 import type { AgentScope } from "./agents.ts";
-import type { DelegateClient } from "./rpc.ts";
+import type { DelegateClient } from "../../shared/rpc.ts";
 
 export interface UsageStats {
 	input: number;
