@@ -293,6 +293,7 @@ function setupView() {
 		posts: [] as string[],
 		suspends: 0,
 		actions: [] as string[],
+		copies: [] as string[],
 	};
 	const script = { confirm: true, inputs: [] as (string | undefined)[] };
 	let closed = 0;
@@ -326,6 +327,9 @@ function setupView() {
 		highlight: (text) => `[${text}]`,
 		paint: (state, text) => `{${state}:${text}}`,
 		dim: (text) => text,
+		success: (text) => `(${text})`,
+		inverse: (text) => `<${text}>`,
+		copy: (text) => log.copies.push(text),
 	};
 	const view = new RunListView(deps);
 	const press = async (key: string) => {
@@ -357,7 +361,7 @@ test("rows list runs newest first with the selection marked and the key line las
 	assert.equal(lines[2], `  [> ${formatOverlayRow(makeRun({ id: "new", startedAt: NOW - 1_000 }), NOW, 56)}]`);
 	assert.match(lines[3], /^ {4}\{paused:⏸\} glm ask {2}Check ask {2}\{paused:paused\}: 2 questions/);
 	assert.match(lines[4], /^ {4}\{running:▶\} glm old /);
-	assert.equal(lines.at(-1), "↑↓ select · ←→ pan · space actions · s stop · m message · a answer · esc or alt+a close");
+	assert.equal(lines.at(-1), "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close");
 });
 
 test("up and down move the selection and wrap", async () => {
@@ -703,5 +707,53 @@ test("the wheel moves the selection a run a tick and shift+wheel pans", () => {
 	assert.match(view.render(60).at(-1) ?? "", /^→ 8 · /, "wheel-up with shift pans right");
 	wheel(1, true);
 	assert.match(view.render(60).at(-1) ?? "", /^↑↓ select/);
-	assert.equal(view.handleMouse({ ...({} as TuiMouseEvent), type: "click", button: "left" }), undefined);
+	assert.equal(view.handleMouse({ ...({} as TuiMouseEvent), type: "move", button: "none" }), undefined);
+});
+
+test("a press on a run row selects it and a left click opens its actions; other rows swallow the click", async () => {
+	const { view, log, press } = setupView();
+	// setupView lists new, ask, old under RUNNING; the box border puts view line 0 at y=1, so
+	// the header is y=2 and the third run is y=5.
+	const mouse = (type: TuiMouseEvent["type"], y: number, button: TuiMouseEvent["button"] = "left") =>
+		view.handleMouse({ ...({} as TuiMouseEvent), type, button, x: 4, y, shift: false, alt: false, ctrl: false });
+	view.render(60);
+	assert.deepEqual(mouse("press", 5), { capture: true, handled: true, render: true });
+	mouse("release", 5);
+	assert.match(view.render(60)[4], /^ {2}\[> ▶ glm old/);
+	assert.deepEqual(log.actions, []);
+	mouse("click", 5);
+	await view.settled();
+	assert.deepEqual(log.actions, ["old"]);
+	mouse("click", 4, "right");
+	await view.settled();
+	assert.deepEqual(log.actions, ["old"], "a right click only selects");
+	assert.match(view.render(60)[3], /^ {2}\[> ⏸ glm ask/);
+	assert.deepEqual(mouse("click", 2), { handled: true }, "a click on the header does nothing and does not reach the editor");
+	await press("escape");
+});
+
+test("a drag highlights the text it covers in inverse video and copies it on release", async () => {
+	const { view, log, press } = setupView();
+	const mouse = (type: TuiMouseEvent["type"], x: number, y: number) =>
+		view.handleMouse({ ...({} as TuiMouseEvent), type, button: "left", x, y, shift: false, alt: false, ctrl: false });
+	view.render(60);
+	// The box frame is one row above and two columns left of the view's lines, so (x=2, y=2) is view line 1, col 0: the RUNNING header.
+	mouse("press", 2, 2);
+	mouse("drag", 8, 2);
+	assert.equal(view.render(60)[1], `<  RUNNI>NG${" ".repeat(60 - "  RUNNING".length)}`);
+	mouse("release", 8, 2);
+	assert.deepEqual(log.copies, ["  RUNNI"]);
+	assert.equal(view.render(60).at(-1), "(copied)", "the help line reads copied");
+	assert.deepEqual(log.actions, [], "a drag does not open the actions panel");
+	// A drag across lines copies each line, trimmed, joined by newlines.
+	mouse("press", 2, 2);
+	mouse("drag", 10, 3);
+	mouse("release", 10, 3);
+	// The test's highlight wraps in brackets rather than escape codes, so the bracket survives the strip.
+	assert.equal(log.copies[1], "  RUNNING\n  [> ▶ gl");
+	// A press that never moves leaves no highlight behind.
+	mouse("press", 2, 2);
+	mouse("release", 2, 2);
+	assert.equal(view.render(60)[1], "  RUNNING");
+	await press("escape");
 });

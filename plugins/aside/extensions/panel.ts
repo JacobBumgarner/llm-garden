@@ -1,7 +1,8 @@
 /**
- * The aside overlay: a bordered box with a scrolling transcript, an
- * input line, and a status line. It talks to the side agent through a
- * `PanelBackend`, so tests run it with a fake.
+ * The aside overlay: a bordered box with a scrolling transcript, an input
+ * line, and a status line showing the model and the hide key, or `copied` for
+ * a moment after a copy. It talks to the side agent through a `PanelBackend`,
+ * so tests run it with a fake.
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -23,6 +24,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { copyToClipboard } from "../../ask/extensions/clipboard.ts";
 import type { PromptDisposition } from "../../shared/rpc.ts";
+import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
+
+export { selectedText } from "../../shared/selection.ts";
 
 export const TOGGLE_KEY = "alt+/";
 export const WHEEL_LINES = 3;
@@ -87,44 +91,6 @@ export interface PanelOptions {
 	now?: () => number;
 }
 
-/** A transcript position: line index into the full transcript, character column into that line. */
-interface Cell {
-	line: number;
-	col: number;
-}
-
-/** A drag from the pressed cell to the one under the pointer; `settled` once released. */
-interface Selection {
-	anchor: Cell;
-	focus: Cell;
-	settled: boolean;
-}
-
-function before(a: Cell, b: Cell): boolean {
-	return a.line < b.line || (a.line === b.line && a.col < b.col);
-}
-
-/** The selection's cells in reading order. */
-function ordered(selection: { anchor: Cell; focus: Cell }): [Cell, Cell] {
-	return before(selection.focus, selection.anchor) ? [selection.focus, selection.anchor] : [selection.anchor, selection.focus];
-}
-
-function clamp(value: number, low: number, high: number): number {
-	return Math.max(low, Math.min(value, high));
-}
-
-/** The text a selection covers: the first line from its start column, whole lines between, the last through its end column. */
-export function selectedText(lines: string[], selection: { anchor: Cell; focus: Cell }): string {
-	const [start, end] = ordered(selection);
-	const out: string[] = [];
-	for (let line = start.line; line <= end.line && line < lines.length; line++) {
-		const from = line === start.line ? start.col : 0;
-		const to = line === end.line ? end.col + 1 : Number.POSITIVE_INFINITY;
-		out.push(sliceByColumn(lines[line]!, from, to - from).trimEnd());
-	}
-	return out.join("\n");
-}
-
 type Part = { type: "text"; text: string } | { type: "tool"; line: string };
 
 /** Assistant parts are indexed by the stream's `contentIndex`, so thinking blocks leave holes. */
@@ -134,6 +100,10 @@ type Item =
 	| { kind: "note"; text: string; dim?: boolean };
 
 type State = "starting" | "ready" | "failed" | "stopped";
+
+function clamp(value: number, low: number, high: number): number {
+	return Math.max(low, Math.min(value, high));
+}
 
 /** Scroll offset clamped to the body, or pinned to the end. */
 export function viewportTop(bodyHeight: number, viewportHeight: number, top: number, pinned: boolean): number {
@@ -191,7 +161,7 @@ export class AsidePanel implements Component, Focusable {
 	private top = 0;
 	private pinned = true;
 	private bodyRows = 10;
-	private selection?: Selection;
+	private readonly selection = new TextSelection();
 	private copiedUntil = 0;
 	/** The transcript as last painted, unstyled, with the scroll offset and width, for mapping the pointer to text. */
 	private painted: { lines: string[]; top: number; width: number } = { lines: [], top: 0, width: 0 };
@@ -227,7 +197,7 @@ export class AsidePanel implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		this.selection = undefined;
+		this.selection.clear();
 		if (matchesKey(data, TOGGLE_KEY)) this.o.hide();
 		else if (matchesKey(data, "escape")) this.escape();
 		else if (matchesKey(data, "enter")) this.submit();
@@ -240,17 +210,20 @@ export class AsidePanel implements Component, Focusable {
 			this.scrollBy(Math.sign(event.wheelDelta ?? 0) * WHEEL_LINES);
 			return { handled: true, render: true };
 		}
-		if (this.selection && !this.selection.settled) return this.selectionEvent(event);
+		if (this.selection.dragging) {
+			const { result, copy } = this.selection.drag(event, (x, y, edges) => this.cellAt(x, y, edges), this.painted.lines);
+			if (copy !== undefined) this.copy(copy);
+			return result;
+		}
 		if (event.button !== "left") return undefined;
 		if (event.type === "press") {
-			this.selection = undefined;
 			const cell = this.cellAt(event.x, event.y, false);
-			if (cell) this.selection = { anchor: cell, focus: cell, settled: false };
+			this.selection.press(cell);
 			return { capture: cell !== undefined, handled: true, render: true };
 		}
 		if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
 			const cell = this.cellAt(event.x, event.y, false);
-			if (cell) this.copyLine(cell.line);
+			if (cell) this.copy(this.selection.selectLine(this.painted.lines, cell.line));
 			return { handled: true, render: true };
 		}
 		return undefined;
@@ -268,31 +241,6 @@ export class AsidePanel implements Component, Focusable {
 		return { line, col: clamp(bodyX, 0, width - 1) };
 	}
 
-	/** Grow the selection while the button is held. On release copy what it covers and leave it highlighted, or drop it when it never moved. */
-	private selectionEvent(event: TuiMouseEvent): TuiMouseEventResult {
-		const selection = this.selection!;
-		if (event.type === "drag" || event.type === "move") {
-			const cell = this.cellAt(event.x, event.y, true);
-			if (cell) this.selection = { ...selection, focus: cell };
-			return { handled: true, render: true };
-		}
-		if (event.type === "release") {
-			const moved = before(selection.anchor, selection.focus) || before(selection.focus, selection.anchor);
-			this.selection = moved ? { ...selection, settled: true } : undefined;
-			if (moved) this.copy(selectedText(this.painted.lines, selection));
-			return { handled: true, render: true };
-		}
-		return { handled: true };
-	}
-
-	/** Select a whole transcript line and copy it, as a double click does. */
-	private copyLine(line: number): void {
-		const text = this.painted.lines[line] ?? "";
-		const end = Math.max(0, visibleWidth(text) - 1);
-		this.selection = { anchor: { line, col: 0 }, focus: { line, col: end }, settled: true };
-		this.copy(text.trimEnd());
-	}
-
 	private now(): number {
 		return (this.o.now ?? Date.now)();
 	}
@@ -302,19 +250,6 @@ export class AsidePanel implements Component, Focusable {
 		void (this.o.copyToClipboard ?? copyToClipboard)(text, this.o.tui.terminal);
 		this.copiedUntil = this.now() + COPIED_MS;
 		setTimeout(() => this.o.tui.requestRender(), COPIED_MS).unref?.();
-	}
-
-	/** Paint the selected span of a visible line in inverse video, padding the line first so a selection past its end still shows. */
-	private highlighted(text: string, line: number, width: number): string {
-		if (!this.selection) return text;
-		const [start, end] = ordered(this.selection);
-		if (line < start.line || line > end.line) return text;
-		const from = line === start.line ? start.col : 0;
-		const to = Math.min(width - 1, line === end.line ? end.col : Number.POSITIVE_INFINITY);
-		if (from > to) return text;
-		const padded = text + " ".repeat(Math.max(0, width - visibleWidth(text)));
-		const span = stripTerminalSequences(sliceByColumn(padded, from, to - from + 1));
-		return sliceByColumn(padded, 0, from) + this.o.theme.inverse(span) + sliceByColumn(padded, to + 1, width - to - 1);
 	}
 
 	render(width: number): string[] {
@@ -330,7 +265,7 @@ export class AsidePanel implements Component, Focusable {
 		this.painted = { lines: lines.map(stripTerminalSequences), top: this.top, width: inner };
 		const body = lines
 			.slice(this.top, this.top + this.bodyRows)
-			.map((l, i) => this.highlighted(sliceByColumn(l, 0, inner), this.top + i, inner));
+			.map((l, i) => highlightSelection(sliceByColumn(l, 0, inner), this.top + i, inner, this.selection.current, (s) => theme.inverse(s)));
 		while (body.length < this.bodyRows) body.push("");
 
 		const status =
@@ -352,10 +287,11 @@ export class AsidePanel implements Component, Focusable {
 	private frame(width: number, rows: string[]): string[] {
 		const border = (s: string) => this.o.theme.fg("border", s);
 		const inner = Math.max(width - 4, 1);
-		const title = truncateToWidth(" aside ", Math.max(width - 2, 0), "");
-		const topRule = `┌${title}${"─".repeat(Math.max(width - 2 - visibleWidth(title), 0))}┐`;
+		const edge = Math.max(width - 2, 0);
+		const title = truncateToWidth(" aside ", edge, "");
+		const topRule = `┌${title}${"─".repeat(edge - visibleWidth(title))}┐`;
 		const framed = rows.map((l) => `${border("│")} ${truncateToWidth(l, inner, "…", true)} ${border("│")}`);
-		return [border(topRule), ...framed, border(`└${"─".repeat(Math.max(width - 2, 0))}┘`)];
+		return [border(topRule), ...framed, border(`└${"─".repeat(edge)}┘`)];
 	}
 
 	private transcriptLines(width: number): string[] {

@@ -4,8 +4,10 @@
  * session, running runs above finished ones under headers that always draw,
  * scrolling the list to fit the height pi gives the overlay, with keys to
  * stop, steer, or answer the selected one, or open its actions panel (the
- * focus-mode panel over the run's own tool calls). Like that panel, it pans
- * sideways with ←/→ (or shift+wheel) to read long labels, `0` pans back,
+ * focus-mode panel over the run's own tool calls). A click on a run row
+ * selects it and opens its actions panel, and a drag selects text and copies
+ * it to the clipboard, as in the aside panel. The list pans sideways
+ * with ←/→ (or shift+wheel) to read long labels, `0` pans back,
  * PgUp/PgDn, Home/End, g/G, and the wheel move the selection. The stop-all paths:
  * `/subagents stop`, the overlay `s` key, and a double Esc, which arrives as
  * the `subagent:stop-all` event. The `alt+a` shortcut and bare `/subagents`
@@ -21,11 +23,14 @@ import {
 	matchesKey,
 	type OverlayHandle,
 	sliceByColumn,
+	stripTerminalSequences,
 	truncateToWidth,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { copyToClipboard } from "../../ask/extensions/clipboard.ts";
+import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
 import type { AskQuestion } from "../../ask/extensions/types.ts";
 import { ActionLog } from "../../focus-mode/extensions/log.ts";
 import { ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/extensions/panel.ts";
@@ -52,9 +57,15 @@ const BOX_FRAME = 4;
 const ROW_INDENT = 2;
 const OVERLAY_HEIGHT_FRACTION = 0.6;
 const BOX_EDGES = 2;
+/** Lines the box frame adds above the view's own lines, which mouse rows arrive relative to. */
+const BOX_TOP = 1;
 /** The leading blank, the blank above the help line, and the help line. */
 const FIXED_LINES = 3;
-const HELP_LINE = "↑↓ select · ←→ pan · space actions · s stop · m message · a answer · esc or alt+a close";
+const HELP_LINE = "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close";
+/** Columns the box frame adds left of the view's own lines: the border and one space. */
+const BOX_LEFT = 2;
+/** How long the help line reads "copied" after a drag copies text. */
+const COPIED_MS = 1500;
 /** Columns one ← or → key (or one shift+wheel tick) pans, matching the actions panel. */
 export const PAN_STEP = 8;
 
@@ -165,9 +176,21 @@ export interface RunListDeps {
 	paint: OverlayPaint;
 	/** Style the key line, headers, and empty-group lines. */
 	dim: (text: string) => string;
+	/** Style the `copied` label that stands in for the key line after a copy. */
+	success: (text: string) => string;
+	/** Paint a selected span of text, in inverse video. */
+	inverse: (text: string) => string;
+	/** Put dragged text on the clipboard. Defaults to `copyToClipboard` through `terminal`. */
+	copy?: (text: string) => void;
+	/** The terminal the default clipboard copy writes OSC 52 to. Unused when `copy` is given. */
+	terminal?: { write(data: string): void };
 }
 
 type RunAction = (run: Run) => Promise<void>;
+
+function clampNumber(value: number, low: number, high: number): number {
+	return Math.max(low, Math.min(value, high));
+}
 
 /**
  * Overlay component listing the running runs, then the finished runs, each
@@ -182,7 +205,12 @@ type RunAction = (run: Run) => Promise<void>;
  * Home/End (g/G) to the first and last run, and the wheel by one run a tick.
  * Rows wider than the overlay pan sideways with ←/→ or shift+wheel, by
  * `PAN_STEP` columns, up to the widest row's end; `0` pans back. The help
- * line reports the pan while one is in effect.
+ * line reports the pan while one is in effect. Mouse rows arrive relative to
+ * the boxed overlay, so a press on a run row (one line below its index in
+ * `render`) selects the run, and a left click on one opens its actions panel.
+ * A drag from a press highlights the text it covers in inverse video and
+ * copies it on release. The help line reads `copied` for a moment after, as
+ * in the actions panel. The highlight stays until the next press or key.
  */
 export class RunListView {
 	private selected = 0;
@@ -190,6 +218,13 @@ export class RunListView {
 	private pan = 0;
 	private notice: string | undefined;
 	private busy: Promise<void> | undefined;
+	/** The run drawn on each line of the last render, by line index, with undefined for the other lines. */
+	private lineRuns: (Run | undefined)[] = [];
+	/** The lines of the last render, unstyled, with their width, for mapping the pointer to text. */
+	private painted: { lines: string[]; width: number } = { lines: [], width: 0 };
+	private readonly selection = new TextSelection();
+	private copiedUntil = 0;
+	private copiedTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly deps: RunListDeps;
 	private readonly unsubscribe: () => void;
 
@@ -204,6 +239,7 @@ export class RunListView {
 	/** Stop listening to the registry. */
 	dispose(): void {
 		this.unsubscribe();
+		if (this.copiedTimer) clearTimeout(this.copiedTimer);
 	}
 
 	/** Show `message` above the key line until the next key. */
@@ -255,10 +291,16 @@ export class RunListView {
 			if (entry.kind === "none") return this.dimLine("(none)");
 			return `${pad}${this.row(entry.run, entry.run === selected, rowWidth)}`;
 		});
-		if (view.above > 0) rows.unshift(this.dimLine(`↑ ${view.above} more`));
+		const rowRuns = view.entries.map((entry) => (entry.kind === "run" ? entry.run : undefined));
+		if (view.above > 0) {
+			rows.unshift(this.dimLine(`↑ ${view.above} more`));
+			rowRuns.unshift(undefined);
+		}
 		if (view.below > 0) rows.push(this.dimLine(`↓ ${view.below} more`));
-		const help = this.pan > 0 ? `→ ${this.pan} · ${HELP_LINE}` : HELP_LINE;
-		return ["", ...rows, ...notice, "", this.deps.dim(help)];
+		this.lineRuns = [undefined, ...rowRuns];
+		const lines = ["", ...rows, ...notice, "", this.statusLine()];
+		this.painted = { lines: lines.map(stripTerminalSequences), width };
+		return lines.map((line, index) => highlightSelection(line, index, width, this.selection.current, this.deps.inverse));
 	}
 
 	/** The farthest pan that still shows the end of the widest row inside `width` columns (after the `> ` marker). */
@@ -286,6 +328,7 @@ export class RunListView {
 	handleInput(data: string): void {
 		if (this.busy) return;
 		this.notice = undefined;
+		this.selection.clear();
 		// The focused overlay owns input, so pi's shortcut router never sees the toggle chord while it is open.
 		if (matchesKey(data, "escape") || matchesKey(data, TOGGLE_KEY)) return this.deps.close();
 		if (matchesKey(data, "up")) return this.move(-1);
@@ -303,15 +346,82 @@ export class RunListView {
 		if (matchesKey(data, "a")) return this.act(this.answer);
 	}
 
-	/** Wheel moves the selection one run a tick; shift+wheel pans, wheel-up panning right so a trackpad swipe tracks the content. */
+	/**
+	 * Wheel moves the selection one run a tick; shift+wheel pans, wheel-up panning right so a
+	 * trackpad swipe tracks the content. A press on a run row selects it, and a left click on
+	 * one opens its actions panel. A press also anchors a text selection, which a drag grows and
+	 * a release copies; pi sends no click after a drag, so a drag never opens the panel. Other
+	 * presses and clicks are swallowed so they do not reach the editor behind the overlay.
+	 */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type !== "wheel") return undefined;
+		if (event.type === "wheel") {
+			if (this.busy) return { handled: true };
+			const delta = Math.sign(event.wheelDelta ?? 0);
+			if (delta === 0) return { handled: true };
+			if (event.shift) this.panBy(-delta * PAN_STEP);
+			else this.moveTo(this.selected + delta);
+			return { handled: true, render: true };
+		}
+		if (this.selection.dragging) {
+			const { result, copy } = this.selection.drag(event, (x, y, edges) => this.cellAt(x, y, edges), this.painted.lines);
+			if (copy !== undefined) this.copy(copy);
+			return result;
+		}
+		if (event.type !== "press" && event.type !== "click") return undefined;
 		if (this.busy) return { handled: true };
-		const delta = Math.sign(event.wheelDelta ?? 0);
-		if (delta === 0) return { handled: true };
-		if (event.shift) this.panBy(-delta * PAN_STEP);
-		else this.moveTo(this.selected + delta);
+		if (event.type === "press") {
+			const cell = event.button === "left" ? this.cellAt(event.x, event.y, false) : undefined;
+			this.selection.press(cell);
+			const index = this.runIndexAt(event.y);
+			if (index !== undefined) {
+				this.notice = undefined;
+				this.moveTo(index);
+			}
+			return { capture: cell !== undefined, handled: true, render: true };
+		}
+		const index = this.runIndexAt(event.y);
+		if (index === undefined) return { handled: true };
+		this.notice = undefined;
+		this.moveTo(index);
+		if (event.button === "left") this.act(this.actions);
 		return { handled: true, render: true };
+	}
+
+	/** Map a boxed point to the view cell under it; with `clampEdges` a point outside snaps to the nearest cell. */
+	private cellAt(x: number, y: number, clampEdges: boolean): Cell | undefined {
+		const { lines, width } = this.painted;
+		if (lines.length === 0) return undefined;
+		const col = x - BOX_LEFT;
+		const line = y - BOX_TOP;
+		const inside = col >= 0 && col < width && line >= 0 && line < lines.length;
+		if (!clampEdges && !inside) return undefined;
+		return { line: clampNumber(line, 0, lines.length - 1), col: clampNumber(col, 0, width - 1) };
+	}
+
+	/** The last row: `copied` for a moment after a drag copies text, else the key line with the pan in front while one is in effect. */
+	private statusLine(): string {
+		if (this.deps.now() < this.copiedUntil) return this.deps.success("copied");
+		return this.deps.dim(this.pan > 0 ? `→ ${this.pan} · ${HELP_LINE}` : HELP_LINE);
+	}
+
+	/** Put `text` on the clipboard and show `copied` in place of the key line for `COPIED_MS`, with a redraw when that lapses. */
+	private copy(text: string): void {
+		if (text === "") return;
+		const { copy, terminal, requestRender, now } = this.deps;
+		if (copy) copy(text);
+		else if (terminal) void copyToClipboard(text, terminal);
+		this.copiedUntil = now() + COPIED_MS;
+		if (this.copiedTimer) clearTimeout(this.copiedTimer);
+		this.copiedTimer = setTimeout(requestRender, COPIED_MS);
+		this.copiedTimer.unref?.();
+	}
+
+	/** The selection index of the run drawn on boxed line `y` of the last render, if that line holds one. */
+	private runIndexAt(y: number): number | undefined {
+		const run = this.lineRuns[y - BOX_TOP];
+		if (!run) return undefined;
+		const index = this.runs().indexOf(run);
+		return index === -1 ? undefined : index;
 	}
 
 	/** Wrap the selection by `delta` runs. */
@@ -568,6 +678,9 @@ async function openOverlay(pi: Pick<ExtensionAPI, "sendMessage">, registry: View
 					highlight: (text) => theme.fg("accent", text),
 					paint: (state, text) => theme.fg(overlayStateColor(state), text),
 					dim: (text) => theme.fg("dim", text),
+					success: (text) => theme.fg("success", text),
+					inverse: (text) => theme.inverse(text),
+					terminal: tui.terminal,
 				});
 				view = created;
 				finish = () => done();
