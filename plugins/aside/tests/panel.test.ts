@@ -330,7 +330,7 @@ describe("scrolling", () => {
 		assert.equal(firstLine(panel), 1);
 	});
 
-	it("scrolls three lines per wheel notch and unpins", async () => {
+	it("scrolls one line per wheel notch and unpins", async () => {
 		const { panel, backend } = setup();
 		await tick();
 		longAnswer(backend, 60);
@@ -338,9 +338,9 @@ describe("scrolling", () => {
 		const before = firstLine(panel);
 		const result = panel.handleMouse(wheel(-1));
 		assert.deepEqual(result, { handled: true, render: true });
-		// Answer lines alternate with blanks, so three rows up moves the first visible line number by one or two.
+		// Answer lines alternate with blanks, so one row up moves the first visible line number by zero or one.
 		const after = firstLine(panel);
-		assert.ok(after === before - 1 || after === before - 2, `${after} vs ${before}`);
+		assert.ok(after === before || after === before - 1, `${after} vs ${before}`);
 		assert.deepEqual(panel.handleMouse({ type: "click" } as TuiMouseEvent), { handled: true });
 	});
 

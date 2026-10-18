@@ -55,13 +55,13 @@ describe("Viewport", () => {
 		assert.equal(v.layout(50, 10), 40);
 	});
 
-	it("scrolls the wheel by three lines in the delta's direction", () => {
+	it("scrolls the wheel by one line in the delta's direction", () => {
 		const v = settled();
 		v.wheel(-1);
 		assert.equal(v.layout(50, 10), 40 - WHEEL_LINES);
 		v.wheel(5);
 		assert.equal(v.layout(50, 10), 40);
-		assert.equal(WHEEL_LINES, 3);
+		assert.equal(WHEEL_LINES, 1);
 	});
 
 	it("scrolls from an explicit top", () => {

@@ -1,7 +1,7 @@
 import { matchesKey } from "@earendil-works/pi-tui";
 
-/** Lines a wheel notch scrolls. */
-export const WHEEL_LINES = 3;
+/** Lines a wheel notch scrolls. A trackpad sends many notches, so more than one jumps. */
+export const WHEEL_LINES = 1;
 
 /** Scroll offset clamped to the body, or pinned to the end. */
 export function viewportTop(bodyHeight: number, viewportHeight: number, top: number, pinned: boolean): number {

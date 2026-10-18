@@ -258,7 +258,7 @@ describe("ActionsPanel", () => {
 		component.handleMouse(mouse("wheel", 5, 2, { wheelDelta: -1 }));
 		const lines = component.render(40);
 		component.dispose();
-		assert.ok(lines[0]!.includes("read f1"), lines[0]);
+		assert.ok(lines[0]!.includes("read f3"), lines[0]);
 	});
 
 	it("takes its share of the terminal height, floored", () => {
