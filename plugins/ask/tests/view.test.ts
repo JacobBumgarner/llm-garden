@@ -286,17 +286,27 @@ test("dragging over the option column highlights and copies only that column, an
 	assert.doesNotMatch(form.render(160)[context], /\[/, "and leaves no highlight");
 });
 
-test("a double click copies the whole line under it in either column", () => {
+test("a double click copies the word under it in the code column", () => {
 	const { form } = mount();
 	const lines = form.render(160);
 	const header = lineOf(lines, /lines 1–/);
 	const codeX = lines[header + 1].indexOf("const line0");
 	written.length = 0;
-	assert.deepEqual(form.handleMouse({ ...mouse("click", codeX + 4, header + 2), clickCount: 2 } as TuiMouseEvent), { handled: true, render: true, focus: true });
+	assert.deepEqual(form.handleMouse({ ...mouse("click", codeX + 2, header + 2), clickCount: 2 } as TuiMouseEvent), { handled: true, render: true, focus: true });
+	assert.equal(lastCopy(), "const");
+});
+
+test("a triple click copies the whole line under it in either column", () => {
+	const { form } = mount();
+	const lines = form.render(160);
+	const header = lineOf(lines, /lines 1–/);
+	const codeX = lines[header + 1].indexOf("const line0");
+	written.length = 0;
+	assert.deepEqual(form.handleMouse({ ...mouse("click", codeX + 4, header + 2), clickCount: 3 } as TuiMouseEvent), { handled: true, render: true, focus: true });
 	assert.equal(lastCopy(), `const line1 = ${"x".repeat(100)};`);
 	assert.match(form.render(160)[header], /copied/);
 	const context = lineOf(lines, /^Some context\./);
-	form.handleMouse({ ...mouse("click", 3, context), clickCount: 2 } as TuiMouseEvent);
+	form.handleMouse({ ...mouse("click", 3, context), clickCount: 3 } as TuiMouseEvent);
 	assert.equal(lastCopy(), "Some context.");
 });
 

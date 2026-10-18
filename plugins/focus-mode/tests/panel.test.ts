@@ -231,10 +231,19 @@ describe("ActionsPanel", () => {
 		assert.equal(Buffer.from(payload, "base64").toString("utf8"), "○ … read first\n○ … read");
 	});
 
-	it("copies a whole line on double click", () => {
+	it("copies a word on double click", () => {
 		const { component, written } = panel([entry({ id: "a", name: "read", args: { path: "f.ts" } })], 6);
 		component.render(40);
-		component.handleMouse(mouse("click", 3, 1, { clickCount: 2 }));
+		component.handleMouse(mouse("click", 5, 1, { clickCount: 2 }));
+		component.dispose();
+		const payload = written[0]!.match(/52;c;([^\x07]+)/)![1]!;
+		assert.equal(Buffer.from(payload, "base64").toString("utf8"), "read");
+	});
+
+	it("copies a whole line on triple click", () => {
+		const { component, written } = panel([entry({ id: "a", name: "read", args: { path: "f.ts" } })], 6);
+		component.render(40);
+		component.handleMouse(mouse("click", 3, 1, { clickCount: 3 }));
 		const lines = component.render(40);
 		component.dispose();
 		assert.ok(lines[1]!.includes("[○ … read f.ts"), lines[1]);

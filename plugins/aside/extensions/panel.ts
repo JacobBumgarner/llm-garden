@@ -203,7 +203,7 @@ export class AsidePanel implements Component, Focusable {
 		}
 		if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
 			const cell = cellAt(this.painted, event.x, event.y, false);
-			if (cell) this.feedback.copy(this.selection.selectLine(this.painted.lines, cell.line));
+			if (cell) this.feedback.copy(this.selection.selectClicks(this.painted.lines, cell, event.clickCount ?? 2));
 			return { handled: true, render: true };
 		}
 		return { handled: true };

@@ -138,6 +138,33 @@ describe("TextSelection", () => {
 		assert.deepEqual(s.current, { anchor: { line: 0, col: 0 }, focus: { line: 0, col: 3 }, settled: true });
 	});
 
+	test("selectWord selects the word under the cell and returns it", () => {
+		const s = new TextSelection();
+		assert.equal(s.selectWord(["foo bar baz"], { line: 0, col: 5 }), "bar");
+		assert.deepEqual(s.current, { anchor: { line: 0, col: 4 }, focus: { line: 0, col: 6 }, settled: true });
+	});
+
+	test("selectWord keeps paths and kebab-case tokens whole", () => {
+		const s = new TextSelection();
+		assert.equal(s.selectWord(["see src/foo-bar.ts now"], { line: 0, col: 6 }), "src/foo-bar.ts");
+		assert.equal(s.selectWord(["see src/foo-bar.ts now"], { line: 0, col: 8 }), "src/foo-bar.ts");
+	});
+
+	test("selectWord on a space or past the line selects nothing", () => {
+		const s = new TextSelection();
+		s.press({ line: 0, col: 0 });
+		assert.equal(s.selectWord(["foo bar"], { line: 0, col: 3 }), "");
+		assert.equal(s.current, undefined);
+		assert.equal(s.selectWord(["foo bar"], { line: 0, col: 20 }), "");
+		assert.equal(s.selectWord(["a - b"], { line: 0, col: 2 }), "");
+	});
+
+	test("selectClicks picks the word for 2 clicks and the line for 3", () => {
+		const s = new TextSelection();
+		assert.equal(s.selectClicks(["foo bar"], { line: 0, col: 5 }, 2), "bar");
+		assert.equal(s.selectClicks(["foo bar"], { line: 0, col: 5 }, 3), "foo bar");
+	});
+
 	test("clear drops the selection", () => {
 		const s = new TextSelection();
 		s.press({ line: 0, col: 0 });

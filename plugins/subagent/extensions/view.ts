@@ -347,6 +347,11 @@ export class RunListView {
 			}
 			return { capture: cell !== undefined, handled: true, render: true };
 		}
+		if (event.button === "left" && (event.clickCount ?? 1) >= 2) {
+			const cell = cellAt(this.painted, event.x, event.y, false);
+			if (cell) this.feedback.copy(this.selection.selectClicks(this.painted.lines, cell, event.clickCount ?? 2));
+			return { handled: true, render: true };
+		}
 		const index = this.runIndexAt(event.y);
 		if (index === undefined) return { handled: true };
 		this.notice = undefined;

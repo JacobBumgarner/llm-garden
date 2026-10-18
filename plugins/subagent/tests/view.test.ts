@@ -709,6 +709,19 @@ test("a press on a run row selects it and a left click opens its actions; other 
 	await press("escape");
 });
 
+test("a double click copies the word and a triple click the line under it", async () => {
+	const { view, log, press } = setupView();
+	const click = (x: number, y: number, clickCount: number) =>
+		view.handleMouse({ ...({} as TuiMouseEvent), type: "click", button: "left", x, y, clickCount, shift: false, alt: false, ctrl: false });
+	view.render(60);
+	assert.deepEqual(click(4, 1, 2), { handled: true, render: true });
+	assert.deepEqual(log.copies, ["RUNNING"]);
+	click(4, 1, 3);
+	assert.deepEqual(log.copies, ["RUNNING", "  RUNNING"]);
+	assert.deepEqual(log.actions, [], "a double click does not open the actions panel");
+	await press("escape");
+});
+
 test("a drag highlights the text it covers in inverse video and copies it on release", async () => {
 	const { view, log, press } = setupView();
 	const mouse = (type: TuiMouseEvent["type"], x: number, y: number) =>

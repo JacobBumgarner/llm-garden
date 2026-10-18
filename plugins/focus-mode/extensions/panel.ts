@@ -14,8 +14,8 @@
  * running durations advance, so the panel draws only its text area. Esc, q, space, or the opening
  * shortcut closes it; ↑/↓, PgUp/PgDn, Home, End, and the wheel scroll. A drag over the body selects
  * text, copies it to the clipboard on release, and leaves it highlighted until the next press or
- * key; a double click copies the whole line. The last row carries the key hint, and reads "copied"
- * for a moment after a copy.
+ * key; a double click copies the word and a triple click the line. The last row carries the key
+ * hint, and reads "copied" for a moment after a copy.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -278,7 +278,7 @@ export class ActionsPanel implements Component {
 		}
 		if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
 			const cell = cellAt(this.painted, event.x, event.y, false);
-			if (cell) this.feedback.copy(this.selection.selectLine(this.painted.lines, cell.line));
+			if (cell) this.feedback.copy(this.selection.selectClicks(this.painted.lines, cell, event.clickCount ?? 2));
 			return { handled: true, render: true };
 		}
 		return { handled: true };

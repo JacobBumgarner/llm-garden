@@ -253,7 +253,7 @@ export class AskForm implements Component, Focusable {
 			return this.startSelection(event.x, event.y) ?? (cleared ? { handled: true, render: true } : undefined);
 		}
 		if (event.type !== "click") return undefined;
-		if ((event.clickCount ?? 1) >= 2 && this.copyLineAt(event.x, event.y)) return { handled: true, render: true, focus: true };
+		if ((event.clickCount ?? 1) >= 2 && this.copyTextAt(event.x, event.y, event.clickCount ?? 2)) return { handled: true, render: true, focus: true };
 		const hit = this.hitAt(event.x, event.y);
 		if (hit.kind === "tab") this.dispatch({ type: "jump", question: hit.index });
 		else if (hit.kind === "row") this.activate(hit.cursor);
@@ -290,14 +290,14 @@ export class AskForm implements Component, Focusable {
 		return undefined;
 	}
 
-	/** Select and copy the whole line of either column's text under a point. Returns false when the point is on neither. */
-	private copyLineAt(x: number, y: number): boolean {
+	/** Select and copy the word (double click) or line (triple click) of either column's text under a point. Returns false when the point is on neither. */
+	private copyTextAt(x: number, y: number, clickCount: number): boolean {
 		for (const pane of ["code", "options"] as const) {
 			const painted = this.panes[pane];
 			const cell = painted ? cellAt(painted, x, y, false) : undefined;
 			if (!painted || !cell) continue;
 			this.clearSelections();
-			this.feedback.copy(this.selections[pane].selectLine(painted.lines, cell.line));
+			this.feedback.copy(this.selections[pane].selectClicks(painted.lines, cell, clickCount));
 			return true;
 		}
 		return false;

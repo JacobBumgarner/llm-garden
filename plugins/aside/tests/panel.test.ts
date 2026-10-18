@@ -389,9 +389,15 @@ describe("scrolling", () => {
 			assert.deepEqual(copies, ["world\n\nsecond"]);
 		});
 
-		it("copies one line on a double click", async () => {
+		it("copies one word on a double click", async () => {
 			const { panel, copies } = await withText();
 			panel.handleMouse(mouse("click", 2, 2, { clickCount: 2 }));
+			assert.deepEqual(copies, ["second"]);
+		});
+
+		it("copies one line on a triple click", async () => {
+			const { panel, copies } = await withText();
+			panel.handleMouse(mouse("click", 2, 2, { clickCount: 3 }));
 			assert.deepEqual(copies, ["second line"]);
 		});
 

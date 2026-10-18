@@ -14,6 +14,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { clamp } from "./clamp.ts";
 
+const WORD_JOINERS = new Set(["/", "-"]);
+const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+
 /** A position in a list of lines: line index, character column into that line. */
 export interface Cell {
 	line: number;
@@ -108,6 +111,21 @@ export interface DragOutcome {
 	copy?: string;
 }
 
+interface WordSegment {
+	start: number;
+	end: number;
+	selectable: boolean;
+	joiner: boolean;
+}
+
+function canJoin(left: WordSegment, right: WordSegment): boolean {
+	return left.selectable && right.selectable && (left.joiner || right.joiner);
+}
+
+function joinsNeighbour(segments: WordSegment[], index: number): boolean {
+	return (index > 0 && canJoin(segments[index - 1]!, segments[index]!)) || (index < segments.length - 1 && canJoin(segments[index]!, segments[index + 1]!));
+}
+
 /** The selection state of one panel. */
 export class TextSelection {
 	/** The current selection, for `highlightSelection`. */
@@ -145,6 +163,40 @@ export class TextSelection {
 			return { result: { handled: true, render: true }, copy: moved ? selectedText(lines, selection) : undefined };
 		}
 		return { result: { handled: true } };
+	}
+
+	/**
+	 * Select the word under `cell`, settled, and return its text. Paths and kebab-case tokens stay whole:
+	 * a `/` or `-` joins the word-like segments beside it. A cell that is not on a word selects nothing and returns "".
+	 */
+	selectWord(lines: string[], cell: Cell): string {
+		const line = lines[cell.line] ?? "";
+		const segments: WordSegment[] = [];
+		let start = 0;
+		for (const part of wordSegmenter.segment(line)) {
+			const end = start + visibleWidth(part.segment);
+			const joiner = WORD_JOINERS.has(part.segment);
+			segments.push({ start, end, selectable: part.isWordLike === true || joiner, joiner });
+			start = end;
+		}
+		const hit = segments.findIndex((s) => cell.col >= s.start && cell.col < s.end);
+		if (hit < 0 || !segments[hit]!.selectable || (segments[hit]!.joiner && !joinsNeighbour(segments, hit))) {
+			this.current = undefined;
+			return "";
+		}
+		let from = hit;
+		let to = hit;
+		while (from > 0 && canJoin(segments[from - 1]!, segments[from]!)) from--;
+		while (to < segments.length - 1 && canJoin(segments[to]!, segments[to + 1]!)) to++;
+		const anchor = { line: cell.line, col: segments[from]!.start };
+		const focus = { line: cell.line, col: segments[to]!.end - 1 };
+		this.current = { anchor, focus, settled: true };
+		return selectedText(lines, { anchor, focus });
+	}
+
+	/** Select the word under `cell` for a double click and its whole line for a triple click or more. Returns the text to copy. */
+	selectClicks(lines: string[], cell: Cell, clickCount: number): string {
+		return clickCount >= 3 ? this.selectLine(lines, cell.line) : this.selectWord(lines, cell);
 	}
 
 	/** Select all of line `line` of `lines`, settled. Returns the text to copy. */
