@@ -16,6 +16,7 @@ import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const HAIKU_CANDIDATES: Array<[provider: string, id: string]> = [
+	["anthropic", "claude-haiku-5-5"],
 	["anthropic", "claude-haiku-4-5"],
 	["anthropic", "claude-haiku-4-5-20251001"],
 	["lilly-code", "claude-haiku-4.5-20251001-v1"],
@@ -102,8 +103,9 @@ async function generateName(ctx: ExtensionContext, hint?: string): Promise<strin
 	const lines = [
 		"Write a concise, polished title for a coding-assistant session, formatted as a slug: 3-5 words, lowercase, joined by dashes, no quotes.",
 		"Style: read like a well-edited headline or commit subject. Lead with a precise verb or the noun phrase for the deliverable. Use full, natural words -- no abbreviations, internal shorthand, file names, or filler like 'stuff', 'misc', 'help', 'question'. Prefer the specific over the generic (name the component or feature, not just 'bug' or 'code').",
+		"Name the work itself, not the process used to do it. Ignore workflow, skill, or command words such as 'orchestrate', 'plan', 'implement', 'commit-flow', 'review', or 'demo' unless they are the actual subject of the session.",
 		"Good: refine-session-rename-extension, stream-tool-results-to-ui, harden-store-retry-logic, design-delphi-cli.",
-		"Weak: fix-bug, rename-ext, help-with-code, misc-cleanup.",
+		"Weak: fix-bug, rename-ext, help-with-code, misc-cleanup, orchestrate-delphi-cli.",
 		"Reply with the slug only.",
 	];
 	if (hint) {

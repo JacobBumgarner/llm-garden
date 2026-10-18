@@ -94,7 +94,7 @@ export default function (pi: ExtensionAPI) {
 				const top = composeTopBorder(lines[0], width, pi.getSessionName(), live, {
 					badge: (text) => theme.fg("accent", text),
 					warning: (text) => theme.fg("warning", text),
-					name: (text) => theme.fg("muted", text),
+					name: (text) => theme.fg("borderMuted", text),
 					border: (text) => this.borderColor(text),
 				});
 				lines[0] = top.line;
