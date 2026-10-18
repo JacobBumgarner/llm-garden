@@ -402,60 +402,6 @@ export default function focusMode(pi: ExtensionAPI): void {
 	let panelOpen = false;
 	let closePanel: (() => void) | undefined;
 	let redrawPanel: (() => void) | undefined;
-	let swirlTimer: ReturnType<typeof setInterval> | undefined;
-	let swirlFrame = 0;
-
-	// Box breathing, four ticks per side: the bar rises on inhale, holds full, falls on exhale, holds empty.
-	// Block Elements only, so every frame shares one baseline and cell width.
-	const INHALE = ["▂", "▄", "▆", "█"];
-	const HOLD_FULL = ["█", "█", "█", "█"];
-	const EXHALE = ["▆", "▄", "▂", "▁"];
-	const HOLD_EMPTY = ["▁", "▁", "▁", "▁"];
-	const SWIRL_FRAMES = [...INHALE, ...HOLD_FULL, ...EXHALE, ...HOLD_EMPTY];
-	const SWIRL_MS = 1200;
-	/** Bar color: a theme role name, or a `#rrggbb` hex rendered as a truecolor escape. */
-	let swirlColor = "#86B3AD";
-
-	/** How far the quiet hold ticks blend toward black; kept shallow so the colour doesn't fall to grey. */
-	const HOLD_DROP = 0.15;
-
-	function paint(color: string, text: string, drop = 0): string {
-		if (color.startsWith("#")) {
-			const n = parseInt(color.slice(1), 16);
-			const c = (shift: number) => {
-				const v = (n >> shift) & 255;
-				return Math.round(v * (1 - drop));
-			};
-			return `\x1b[38;2;${c(16)};${c(8)};${c(0)}m${text}\x1b[0m`;
-		}
-		return ui ? ui.theme.fg(color as Parameters<Theme["fg"]>[0], text) : text;
-	}
-
-	/** One footer frame: the bar in the chosen color; hold ticks alternate dropped and full so each one still counts. */
-	function swirlText(): string {
-		const i = swirlFrame % SWIRL_FRAMES.length;
-		const holding = (i >= 4 && i < 8) || i >= 12;
-		return paint(swirlColor, SWIRL_FRAMES[i]!, holding && i % 2 === 0 ? HOLD_DROP : 0);
-	}
-
-	/** Step the bar on a timer, calling setStatus on the captured ui object so a stale ctx can't block it. */
-	function startSwirl(): void {
-		stopSwirl();
-		swirlFrame = 0;
-		swirlTimer = setInterval(() => {
-			swirlFrame++;
-			try {
-				ui?.setStatus("focus", swirlText());
-			} catch {
-				stopSwirl();
-			}
-		}, SWIRL_MS);
-	}
-
-	function stopSwirl(): void {
-		if (swirlTimer) clearInterval(swirlTimer);
-		swirlTimer = undefined;
-	}
 
 	const tickers = new Tickers();
 	pi.registerToolRenderer((toolName, next) =>
@@ -514,14 +460,11 @@ export default function focusMode(pi: ExtensionAPI): void {
 		);
 	});
 
-	/** Set the level, capture the ui object, update the footer, and rebuild tool components. */
+	/** Set the level, capture the ui object, and rebuild tool components. */
 	function setLevel(ctx: ExtensionContext, value: FocusLevel): void {
 		level = value;
 		ui = ctx.ui;
 		const on = level !== "off";
-		if (on) startSwirl();
-		else stopSwirl();
-		ctx.ui.setStatus("focus", on ? swirlText() : undefined);
 		ctx.ui.setHiddenThinkingLabel(on ? `${FOLDED}thinking` : undefined);
 		// setToolsExpanded is the one API that re-runs every tool component's renderers; two calls
 		// guarantee at least one state change whatever the current expansion, ending collapsed.
@@ -581,9 +524,8 @@ export default function focusMode(pi: ExtensionAPI): void {
 		log.seed(ctx.sessionManager.getBranch());
 		setLevel(ctx, "hidden");
 	});
-	// Fires on reload and session replacement; without it the old instance's timer keeps writing frames.
+	// Fires on reload and session replacement so the old instance's tickers and panel go away.
 	pi.on("session_shutdown", () => {
-		stopSwirl();
 		tickers.stopAll();
 		closePanel?.();
 	});
@@ -605,16 +547,6 @@ export default function focusMode(pi: ExtensionAPI): void {
 				setLevel(ctx, wanted as FocusLevel);
 			}
 			ctx.ui.notify(level === "hidden" ? `focus: hidden · counter per ${placement}` : `focus: ${level}`, "info");
-		},
-	});
-	pi.registerCommand("breath", {
-		description: "Color the breathing bar: /breath <theme role | #rrggbb>",
-		handler: async (args, ctx) => {
-			const arg = (args ?? "").trim();
-			if (arg) swirlColor = arg;
-			ui = ctx.ui;
-			ctx.ui.setStatus("focus", swirlText());
-			ctx.ui.notify(`breath: ${swirlColor}`, "info");
 		},
 	});
 	pi.registerShortcut("ctrl+shift+o", {

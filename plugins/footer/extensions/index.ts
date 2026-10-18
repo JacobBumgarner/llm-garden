@@ -1,8 +1,8 @@
 /**
  * Minimal one-line footer: `▄ · tokens ⣿ · cost · elapsed · model thinking ···· repo (branch)`.
  *
- * The leading cell is focus-mode's breathing bar when focus is on; it is pinned to the first
- * column so it stays put while the other fields change width.
+ * The leading cell is the breath extension's breathing bar when that extension is on; it is
+ * pinned to the first column so it stays put while the other fields change width.
  *
  * The braille glyph after the token count is a stream-rate meter:
  * - idle: dim, all eight dots
@@ -89,6 +89,8 @@ function modelAlias(id: string): string {
 const modelColor = (alias: string) => MODEL_COLOR[alias.split(" ")[0]];
 
 const REPO_PREFIX = /^lrl-xai-/;
+/** Status key the breath extension publishes its bar under. */
+const BREATH_STATUS = "breath";
 
 // ---------------------------------------------------------------------------
 // Formatting
@@ -404,10 +406,10 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext) {
 				const price = theme.fg("dim", `$${sessionCost(ctx).toFixed(2)}`);
 				const age = theme.fg("dim", elapsed(Date.now() - startedAt));
 
-				// The focus-mode breathing bar takes the first column so it never shifts with the other fields.
+				// The breath extension's bar takes the first column so it never shifts with the other fields.
 				const all = footerData.getExtensionStatuses();
-				const breath = all.get("focus");
-				const statuses = [...all.entries()].filter(([k]) => k !== "focus").map(([, v]) => v).join("  ");
+				const breath = all.get(BREATH_STATUS);
+				const statuses = [...all.entries()].filter(([k]) => k !== BREATH_STATUS).map(([, v]) => v).join("  ");
 				const left = `${breath ? ` ${breath}${sep}` : " "}${[`${tokens} ${activity}`, price, age, `${model} ${thinking}`].join(sep)}`;
 				const right = `${statuses ? `${statuses}  ` : ""}${repo} `;
 

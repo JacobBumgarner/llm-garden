@@ -25,6 +25,7 @@ Extensions I've created to enhance `pi` to my workflow preferences.
 | `stash` | `ctrl+s` stashes the editor text so you can send a new message, change settings, etc. |
 | `focus-mode` | Collapses tool calls in the transcript into one-line summaries. Allows for easier viewing of summarized agent activity. |
 | `footer` | My custom footer for pi. |
+| `breath` | A one-cell box-breathing pacer in the footer status area. `/breath` toggles it, `/breath <theme role \| #rrggbb>` colors it. Disable the extension if you don't want it. |
 | `final-marker` | Draws a full-width rule above the assistant message that ends a turn, so the final answer stands out from intermediate narration between tool calls. |
 | `aside` | `Option+/` (or `/aside`) shows and hides a side panel over the conversation, holding a second agent with its own context and the main agent's tools. It sees what the main agent has done, can read the repo, run commands, and use MCP tools such as web search, and leaves the main session untouched. `/aside new` starts a fresh side agent and keeps the old session on disk. Its conversation is saved as a pi session under `~/.pi/agent/aside-sessions/` and reopens with the main session. |
 
