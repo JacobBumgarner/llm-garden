@@ -9,7 +9,6 @@ import {
 	groupHeader,
 	type PanelStyle,
 	panelRows,
-	selectedText,
 	wrapRow,
 } from "../extensions/panel.ts";
 
@@ -133,14 +132,6 @@ describe("bodyLines", () => {
 		const labels: Record<number, string> = { 1: "just chatting", 2: "do a thing" };
 		const lines = bodyLines([1, 2], [entry({ id: "a", name: "read", group: 2 }), entry({ id: "z", name: "read", group: 3 })], 20, style, (g) => labels[g] ?? "");
 		assert.deepEqual(lines, [" just chatting      ", "(no actions)", "", " do a thing         ", "○ … read", "", "                    ", "○ … read"]);
-	});
-});
-
-describe("selectedText", () => {
-	it("takes the first line from the start column and the last through the end column", () => {
-		const lines = ["abcdef", "ghijkl", "mnopqr"];
-		assert.equal(selectedText(lines, { anchor: { line: 0, col: 2 }, focus: { line: 2, col: 1 } }), "cdef\nghijkl\nmn");
-		assert.equal(selectedText(lines, { anchor: { line: 1, col: 3 }, focus: { line: 1, col: 1 } }), "hij");
 	});
 });
 

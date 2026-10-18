@@ -30,15 +30,12 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { clamp } from "../../shared/clamp.ts";
-import { copyToClipboard } from "../../shared/clipboard.ts";
-import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
+import { CopyFeedback } from "../../shared/copy-feedback.ts";
+import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import { Viewport } from "../../shared/viewport.ts";
 import type { ActionEntry } from "./log.ts";
 import { durationLabel, stripColor } from "./strip.ts";
 import { summarize } from "./summarize.ts";
-
-export { selectedText } from "../../shared/selection.ts";
 
 const DONE = "● ";
 const RUNNING = "○ ";
@@ -51,8 +48,6 @@ const STEP_RULE = "┈┈┈┈┈┈┈┈";
 /** Columns before a group label, matching the transcript's user message padding. */
 const HEADER_PAD = " ";
 const TICK_MS = 1000;
-/** How long the status row reads "copied" after a copy. */
-const COPIED_MS = 1500;
 /** Entries beyond this many are dropped from the top of the view. */
 const MAX_ENTRIES = 500;
 /** Columns of frame around the body: a border and a space on each side. */
@@ -215,21 +210,15 @@ export class ActionsPanel implements Component {
 	private rows: () => number;
 	private requestRender: () => void;
 	private theme: Theme;
-	private terminal: PanelTerminal;
 	private done: () => void;
 	private readonly viewport = new Viewport();
 	/** Where to scroll on the next paint, cleared once applied. */
 	private target: PanelTarget | undefined;
 	private timer: ReturnType<typeof setInterval> | undefined;
 	private readonly selection = new TextSelection();
-	private copiedUntil = 0;
-	/** The body as last painted, unstyled, with the viewport's offset and size, for mapping the pointer to text. */
-	private painted: { lines: string[]; top: number; height: number; width: number } = {
-		lines: [],
-		top: 0,
-		height: 0,
-		width: 0,
-	};
+	private readonly feedback: CopyFeedback;
+	/** The body as last painted, unstyled, for mapping the pointer to text. */
+	private painted: PaintedText = { lines: [], x: FRAME_X, y: 1, width: 0, height: 0, top: 0, pan: 0 };
 
 	constructor(options: {
 		entries: () => ActionEntry[];
@@ -254,8 +243,8 @@ export class ActionsPanel implements Component {
 		this.rows = options.rows;
 		this.requestRender = options.requestRender;
 		this.theme = options.theme;
-		this.terminal = options.terminal;
 		this.done = options.done;
+		this.feedback = new CopyFeedback({ requestRender: options.requestRender, terminal: options.terminal });
 		this.timer = setInterval(() => this.requestRender(), TICK_MS);
 		this.timer.unref?.();
 	}
@@ -265,6 +254,7 @@ export class ActionsPanel implements Component {
 	dispose(): void {
 		if (this.timer) clearInterval(this.timer);
 		this.timer = undefined;
+		this.feedback.dispose();
 	}
 
 	handleInput(data: string): void {
@@ -284,19 +274,19 @@ export class ActionsPanel implements Component {
 			return { handled: true, render: true };
 		}
 		if (this.selection.dragging) {
-			const { result, copy } = this.selection.drag(event, (x, y, edges) => this.cellAt(x, y, edges), this.painted.lines);
-			if (copy !== undefined) this.copy(copy);
+			const { result, copy } = this.selection.drag(event, (x, y, edges) => cellAt(this.painted, x, y, edges), this.painted.lines);
+			if (copy !== undefined) this.feedback.copy(copy);
 			return result;
 		}
 		if (event.button !== "left") return { handled: true };
 		if (event.type === "press") {
-			const cell = this.cellAt(event.x, event.y, false);
+			const cell = cellAt(this.painted, event.x, event.y, false);
 			this.selection.press(cell);
 			return { capture: cell !== undefined, handled: true, render: true };
 		}
 		if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
-			const cell = this.cellAt(event.x, event.y, false);
-			if (cell) this.copy(this.selection.selectLine(this.painted.lines, cell.line));
+			const cell = cellAt(this.painted, event.x, event.y, false);
+			if (cell) this.feedback.copy(this.selection.selectLine(this.painted.lines, cell.line));
 			return { handled: true, render: true };
 		}
 		return { handled: true };
@@ -321,7 +311,7 @@ export class ActionsPanel implements Component {
 			this.target = undefined;
 		}
 		const top = this.viewport.layout(body.length, height);
-		this.painted = { lines: body.map(stripTerminalSequences), top, height, width: content };
+		this.painted = { lines: body.map(stripTerminalSequences), x: FRAME_X, y: 1, width: content, height, top, pan: 0 };
 		const view: string[] = [];
 		for (let row = 0; row < height; row++) {
 			const line = top + row;
@@ -342,32 +332,12 @@ export class ActionsPanel implements Component {
 			th.bold(" actions ") +
 			(this.title ? th.fg("muted", `${this.title} `) : "") +
 			th.fg("dim", `${entries.length}${running ? ` · ${running} running` : ""} `);
-		const copied = Date.now() < this.copiedUntil;
-		const status = copied ? th.fg("success", "copied") : th.fg("dim", "esc close · ↑↓ scroll");
+		const status = this.feedback.active() ? th.fg("success", "copied") : th.fg("dim", "esc close · ↑↓ scroll");
 		return [rule(title, "╭", "╮"), ...view.map(row), row(status), rule("", "╰", "╯")];
 	}
 
 	/** Rows left for entries inside the top rule, the status row, and the bottom rule. */
 	private viewportHeight(): number {
 		return Math.max(1, panelRows(this.rows()) - 3);
-	}
-
-	/** Map a component-local point to the body cell under it; with `clampEdges` a point outside snaps to the nearest cell. */
-	private cellAt(x: number, y: number, clampEdges: boolean): Cell | undefined {
-		const { lines, top, height, width } = this.painted;
-		if (lines.length === 0) return undefined;
-		const bodyX = x - FRAME_X;
-		const bodyY = y - 1;
-		const inside = bodyX >= 0 && bodyX < width && bodyY >= 0 && bodyY < height;
-		if (!clampEdges && !inside) return undefined;
-		const line = clamp(top + clamp(bodyY, 0, height - 1), 0, lines.length - 1);
-		return { line, col: clamp(bodyX, 0, width - 1) };
-	}
-
-	private copy(text: string): void {
-		if (text === "") return;
-		void copyToClipboard(text, this.terminal);
-		this.copiedUntil = Date.now() + COPIED_MS;
-		setTimeout(() => this.requestRender(), COPIED_MS).unref?.();
 	}
 }

@@ -157,7 +157,7 @@ test("clicks pick options, open the Other row, switch tabs, and send; the wheel 
 	assert.match(lines[lineOf(lines, /lines 1–/)], /lines 1–/);
 	form.handleMouse(wheel(3));
 	lines = form.render(160);
-	assert.match(lines.join("\n"), /lines 4–/, "three wheel notches scroll the code three lines");
+	assert.match(lines.join("\n"), /lines 10–/, "three wheel notches scroll the code three lines");
 	const strip = lineOf(lines, /Flags/);
 	form.handleMouse(click(lines[strip].indexOf("Flags"), strip));
 	lines = form.render(160);
@@ -222,13 +222,13 @@ test("the wheel over the option column scrolls the options, not the code", () =>
 	form.handleMouse({ ...wheel(-2), x: 10 });
 	lines = form.render(160);
 	assert.match(lines.join("\n"), /lines 1–/, "the code stayed at its top");
-	assert.match(lines[1], /^context line 21/, "the option column moved up two lines");
+	assert.match(lines[1], /^context line 17/, "the option column moved up six lines");
 	form.handleMouse({ ...wheel(2), x: 10 });
 	assert.match(form.render(160)[1], /^context line 23/, "and wheels back");
 	form.handleMouse({ ...wheel(2), x: 120 });
 	lines = form.render(160);
 	assert.match(lines[1], /^context line 23/, "a wheel over the code leaves the options alone");
-	assert.match(lines.join("\n"), /lines 3–/, "and scrolls the code");
+	assert.match(lines.join("\n"), /lines 7–/, "and scrolls the code six lines");
 });
 
 test("clicks and hovers in the code column reach no option row", () => {
@@ -284,6 +284,20 @@ test("dragging over the option column highlights and copies only that column, an
 	form.handleMouse(mouse("release", 5, context));
 	assert.equal(written.length, 0, "a press without a drag copies nothing, leaving the click to pi");
 	assert.doesNotMatch(form.render(160)[context], /\[/, "and leaves no highlight");
+});
+
+test("a double click copies the whole line under it in either column", () => {
+	const { form } = mount();
+	const lines = form.render(160);
+	const header = lineOf(lines, /lines 1–/);
+	const codeX = lines[header + 1].indexOf("const line0");
+	written.length = 0;
+	assert.deepEqual(form.handleMouse({ ...mouse("click", codeX + 4, header + 2), clickCount: 2 } as TuiMouseEvent), { handled: true, render: true, focus: true });
+	assert.equal(lastCopy(), `const line1 = ${"x".repeat(100)};`);
+	assert.match(form.render(160)[header], /copied/);
+	const context = lineOf(lines, /^Some context\./);
+	form.handleMouse({ ...mouse("click", 3, context), clickCount: 2 } as TuiMouseEvent);
+	assert.equal(lastCopy(), "Some context.");
 });
 
 test("a press on the code header, the rule, or without a code column is not a selection", () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
-import { before, type Cell, highlightSelection, ordered, selectedText, TextSelection } from "../selection.ts";
+import { before, type Cell, cellAt as paintedCellAt, highlightSelection, ordered, type PaintedText, selectedText, TextSelection } from "../selection.ts";
 
 const lines = ["abcdef", "ghijkl", "mnopqr"];
 const mark = (s: string) => `[${s}]`;
@@ -143,5 +143,37 @@ describe("TextSelection", () => {
 		s.press({ line: 0, col: 0 });
 		s.clear();
 		assert.equal(s.current, undefined);
+	});
+});
+
+describe("cellAt", () => {
+	const painted: PaintedText = { lines: ["abcdefgh", "ijklmnop", "qrstuvwx"], x: 2, y: 1, width: 4, height: 5, top: 1, pan: 3 };
+
+	test("maps a point to a line and a column offset by the top and the pan", () => {
+		assert.deepEqual(paintedCellAt(painted, 3, 1, false), { line: 1, col: 4 });
+		assert.deepEqual(paintedCellAt(painted, 5, 2, false), { line: 2, col: 6 });
+	});
+
+	test("refuses a point outside the area and a blank row under the lines", () => {
+		assert.equal(paintedCellAt(painted, 1, 1, false), undefined);
+		assert.equal(paintedCellAt(painted, 6, 1, false), undefined);
+		assert.equal(paintedCellAt(painted, 3, 0, false), undefined);
+		assert.equal(paintedCellAt(painted, 3, 4, false), undefined, "row 3 of the area is past the last line");
+	});
+
+	test("snaps an outside point to the nearest cell when clamping", () => {
+		assert.deepEqual(paintedCellAt(painted, 0, 0, true), { line: 1, col: 3 });
+		assert.deepEqual(paintedCellAt(painted, 20, 20, true), { line: 2, col: 6 });
+	});
+
+	test("gives nothing for an empty body", () => {
+		assert.equal(paintedCellAt({ ...painted, lines: [] }, 3, 1, true), undefined);
+	});
+});
+
+describe("highlightSelection with a pan", () => {
+	test("shifts the selection columns left by the pan", () => {
+		const sel = { anchor: { line: 0, col: 4 }, focus: { line: 0, col: 5 } };
+		assert.equal(highlightSelection("efgh", 0, 4, sel, mark, 3), "e[fg]h");
 	});
 });

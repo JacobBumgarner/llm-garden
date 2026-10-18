@@ -23,8 +23,10 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { clamp } from "../../shared/clamp.ts";
-import { copyToClipboard } from "../../shared/clipboard.ts";
+import { CopyFeedback } from "../../shared/copy-feedback.ts";
 import { editorTheme } from "../../shared/editor-theme.ts";
+import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
+import { WHEEL_LINES } from "../../shared/viewport.ts";
 import { CHORDS, isPrintable, type KeyName, NAV_KEYS, unwrapPaste } from "./keys.ts";
 import {
 	columnRows,
@@ -66,8 +68,6 @@ const FENCE_MARK = "@@ask-fence-7f3a@@";
 const COLUMN_RULE = " │";
 /** Columns from the start of the code column to its first code character: the rule and the left rail. */
 const CODE_INSET = COLUMN_RULE.length + 1;
-/** How long the code header reads "copied" after a copy. */
-const COPIED_MS = 1500;
 const COPIED_LABEL = "copied";
 /** Rails at either end of the code header while code is cut off at that edge. */
 const CUT_MARK_LEFT = "‹";
@@ -88,72 +88,6 @@ const CODE_BG = "toolPendingBg";
 interface CodeLine {
 	text: string;
 	cutRight: boolean;
-}
-
-/** A character position in a column's unwindowed text: line index and column. */
-interface Cell {
-	line: number;
-	col: number;
-}
-
-/** A drag in progress over one column, from the pressed cell to the one under the pointer. Each column selects on its own, so a drag never crosses the rule. */
-interface Selection {
-	pane: ScrollTarget;
-	anchor: Cell;
-	focus: Cell;
-	/** Set on release: the text was copied and the highlight stays as a visual anchor until the next press or key. */
-	settled: boolean;
-}
-
-/** Where a column's text sits in the painted form, in component-local coordinates. */
-interface Area {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}
-
-/** A selectable column as painted: its screen area, the window it shows, and its full text without styling. */
-interface Pane {
-	area: Area;
-	/** First line and first character column on screen. */
-	offset: number;
-	pan: number;
-	lines: string[];
-}
-
-function before(a: Cell, b: Cell): boolean {
-	return a.line < b.line || (a.line === b.line && a.col < b.col);
-}
-
-/** Return the selection's cells in reading order. */
-function ordered(selection: Selection): [Cell, Cell] {
-	return before(selection.focus, selection.anchor) ? [selection.focus, selection.anchor] : [selection.anchor, selection.focus];
-}
-
-function inside(area: Area, x: number, y: number): boolean {
-	return x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height;
-}
-
-/** Map a point to the pane's cell under it; with `clampEdges` a point outside snaps to the nearest cell, else it maps to nothing. */
-function cellAt(pane: Pane, x: number, y: number, clampEdges: boolean): Cell | undefined {
-	if (pane.lines.length === 0 || (!clampEdges && !inside(pane.area, x, y))) return undefined;
-	const { area } = pane;
-	const row = clamp(y, area.y, area.y + area.height - 1) - area.y;
-	const col = clamp(x, area.x, area.x + area.width - 1) - area.x;
-	return { line: clamp(pane.offset + row, 0, pane.lines.length - 1), col: pane.pan + col };
-}
-
-/** Return the text a selection covers in its pane: the first line from its start column, whole lines between, the last through its end column. */
-function selectedText(pane: Pane, selection: Selection): string {
-	const [start, end] = ordered(selection);
-	const lines: string[] = [];
-	for (let line = start.line; line <= end.line && line < pane.lines.length; line++) {
-		const from = line === start.line ? start.col : 0;
-		const to = line === end.line ? end.col + 1 : Number.POSITIVE_INFINITY;
-		lines.push(sliceByColumn(pane.lines[line], from, to - from).trimEnd());
-	}
-	return lines.join("\n");
 }
 
 const MARK_GLYPHS: Record<Mark, string> = {
@@ -254,12 +188,12 @@ export class AskForm implements Component, Focusable {
 	/** The column split from the last render, while a preview column was painted. */
 	private columns: { left: number; right: number } | undefined;
 	/** The two columns as last painted, for mapping the pointer to text; absent in single-column layouts, where pi's own selection serves. */
-	private panes: Partial<Record<ScrollTarget, Pane>> = {};
+	private panes: Partial<Record<ScrollTarget, PaintedText>> = {};
 	/** Every painted line of the option column at its last width, before windowing. */
 	private optionLines: string[] = [];
-	private selection: Selection | undefined;
-	/** Until when the code header reads "copied". */
-	private copiedUntil = 0;
+	/** Each column selects on its own, so a drag never crosses the rule. */
+	private readonly selections: Record<ScrollTarget, TextSelection> = { options: new TextSelection(), code: new TextSelection() };
+	private readonly feedback: CopyFeedback;
 	/** Set when an editor's onSubmit ran inside handleInput; the editor's text is then stale for the next state, so it must not be sent as a draft. */
 	private submitted = false;
 	private finished = false;
@@ -273,6 +207,7 @@ export class AskForm implements Component, Focusable {
 		this.theme = theme;
 		this.done = done;
 		this.state = initialState(questions);
+		this.feedback = new CopyFeedback({ requestRender: () => tui.requestRender(), terminal: tui.terminal });
 		this.textEditor = new Editor(tui, editorTheme(theme));
 		this.noteEditor = new Editor(tui, editorTheme(theme));
 		this.textEditor.onSubmit = (value) => this.submitFrom({ type: "draft", text: value });
@@ -287,6 +222,10 @@ export class AskForm implements Component, Focusable {
 	set focused(value: boolean) {
 		this._focused = value;
 		this.syncEditorFocus();
+	}
+
+	dispose(): void {
+		this.feedback.dispose();
 	}
 
 	invalidate(): void {
@@ -305,20 +244,34 @@ export class AskForm implements Component, Focusable {
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.finished) return undefined;
 		if (event.type === "wheel") return this.wheel(event.wheelDelta ?? 0, this.inCodeColumn(event.x) ? "code" : "options");
-		if (this.selection && !this.selection.settled) return this.selectionEvent(event);
+		const dragging = this.draggingPane();
+		if (dragging) return this.selectionEvent(dragging, event);
 		if (event.type === "move") return this.moveTo(this.hitAt(event.x, event.y));
 		if (event.button !== "left") return undefined;
 		if (event.type === "press") {
-			const cleared = this.selection !== undefined;
-			this.selection = undefined;
+			const cleared = this.clearSelections();
 			return this.startSelection(event.x, event.y) ?? (cleared ? { handled: true, render: true } : undefined);
 		}
 		if (event.type !== "click") return undefined;
+		if ((event.clickCount ?? 1) >= 2 && this.copyLineAt(event.x, event.y)) return { handled: true, render: true, focus: true };
 		const hit = this.hitAt(event.x, event.y);
 		if (hit.kind === "tab") this.dispatch({ type: "jump", question: hit.index });
 		else if (hit.kind === "row") this.activate(hit.cursor);
 		this.tui.requestRender();
 		return { handled: true, focus: true };
+	}
+
+	/** The column a drag is in progress over, if any. */
+	private draggingPane(): ScrollTarget | undefined {
+		return (["code", "options"] as const).find((pane) => this.selections[pane].dragging);
+	}
+
+	/** Drop every selection. Returns whether there was one. */
+	private clearSelections(): boolean {
+		const had = this.selections.code.current !== undefined || this.selections.options.current !== undefined;
+		this.selections.code.clear();
+		this.selections.options.clear();
+		return had;
 	}
 
 	/**
@@ -328,32 +281,38 @@ export class AskForm implements Component, Focusable {
 	 */
 	private startSelection(x: number, y: number): TuiMouseEventResult | undefined {
 		for (const pane of ["code", "options"] as const) {
-			const area = this.panes[pane];
-			const cell = area ? cellAt(area, x, y, false) : undefined;
+			const painted = this.panes[pane];
+			const cell = painted ? cellAt(painted, x, y, false) : undefined;
 			if (!cell) continue;
-			this.selection = { pane, anchor: cell, focus: cell, settled: false };
+			this.selections[pane].press(cell);
 			return { capture: true, focus: true };
 		}
 		return undefined;
 	}
 
+	/** Select and copy the whole line of either column's text under a point. Returns false when the point is on neither. */
+	private copyLineAt(x: number, y: number): boolean {
+		for (const pane of ["code", "options"] as const) {
+			const painted = this.panes[pane];
+			const cell = painted ? cellAt(painted, x, y, false) : undefined;
+			if (!painted || !cell) continue;
+			this.clearSelections();
+			this.feedback.copy(this.selections[pane].selectLine(painted.lines, cell.line));
+			return true;
+		}
+		return false;
+	}
+
 	/** Grow the selection while the button is held; on release copy what it covers and leave it highlighted, or drop it when it never moved. */
-	private selectionEvent(event: TuiMouseEvent): TuiMouseEventResult {
-		const selection = this.selection;
-		const pane = selection && this.panes[selection.pane];
-		if (!selection || !pane) return { handled: true };
-		if (event.type === "drag" || event.type === "move") {
-			const cell = cellAt(pane, event.x, event.y, true);
-			if (cell) this.selection = { ...selection, focus: cell };
-			return { handled: true, render: true };
+	private selectionEvent(pane: ScrollTarget, event: TuiMouseEvent): TuiMouseEventResult {
+		const painted = this.panes[pane];
+		if (!painted) {
+			this.selections[pane].clear();
+			return { handled: true };
 		}
-		if (event.type === "release") {
-			const moved = before(selection.anchor, selection.focus) || before(selection.focus, selection.anchor);
-			this.selection = moved ? { ...selection, settled: true } : undefined;
-			if (moved) this.copy(selectedText(pane, selection));
-			return { handled: true, render: true };
-		}
-		return { handled: true };
+		const { result, copy } = this.selections[pane].drag(event, (x, y, edges) => cellAt(painted, x, y, edges), painted.lines);
+		if (copy !== undefined) this.feedback.copy(copy);
+		return result;
 	}
 
 	/** The code lines without styling, as the clipboard should get them. */
@@ -365,14 +324,7 @@ export class AskForm implements Component, Focusable {
 	private copyCode(): void {
 		const markdown = currentQuestion(this.state)?.options?.[this.state.cursor]?.preview;
 		if (markdown === undefined) return;
-		this.copy(this.plainCode(markdown).join("\n").trimEnd());
-	}
-
-	private copy(text: string): void {
-		if (text === "") return;
-		void copyToClipboard(text, this.tui.terminal);
-		this.copiedUntil = Date.now() + COPIED_MS;
-		setTimeout(() => this.tui.requestRender(), COPIED_MS).unref?.();
+		this.feedback.copy(this.plainCode(markdown).join("\n").trimEnd());
 	}
 
 	/** True when the point is in the preview column, which has no clickable rows. */
@@ -396,10 +348,10 @@ export class AskForm implements Component, Focusable {
 		return { handled: true, render: changed };
 	}
 
-	/** Scroll the column under the pointer one line per wheel notch. */
+	/** Scroll the column under the pointer `WHEEL_LINES` lines per wheel notch. */
 	private wheel(delta: number, target: ScrollTarget): TuiMouseEventResult {
 		const key: KeyName = delta < 0 ? "shift+up" : "shift+down";
-		for (let i = 0; i < Math.abs(delta); i++) this.scroll(key, target);
+		for (let i = 0; i < Math.abs(delta) * WHEEL_LINES; i++) this.scroll(key, target);
 		this.tui.requestRender();
 		return { handled: true };
 	}
@@ -489,7 +441,7 @@ export class AskForm implements Component, Focusable {
 		const before = this.state;
 		this.state = step(before, event);
 		this.followCursor = true;
-		this.selection = undefined;
+		this.clearSelections();
 		this.syncEditors(before);
 		if (this.state.result && !this.finished) {
 			this.finished = true;
@@ -568,12 +520,15 @@ export class AskForm implements Component, Focusable {
 		}));
 		const code = this.codeLines(preview.markdown, right, preview.column);
 		this.panes = {
-			options: { area: { x: 0, y: top, width: left, height: view.budget }, offset: view.windowOffset, pan: 0, lines: this.optionLines },
+			options: { lines: this.optionLines, x: 0, y: top, width: left, height: view.budget, top: view.windowOffset, pan: 0 },
 			code: {
-				area: { x: left + CODE_INSET, y: top + CODE_HEADER_LINES, width: right, height: Math.max(0, view.budget - CODE_HEADER_LINES) },
-				offset: preview.offset,
-				pan: preview.column,
 				lines: this.plainCode(preview.markdown),
+				x: left + CODE_INSET,
+				y: top + CODE_HEADER_LINES,
+				width: right,
+				height: Math.max(0, view.budget - CODE_HEADER_LINES),
+				top: preview.offset,
+				pan: preview.column,
 			},
 		};
 		const shown = code.slice(preview.offset, preview.offset + view.budget - CODE_HEADER_LINES);
@@ -594,15 +549,7 @@ export class AskForm implements Component, Focusable {
 
 	/** Paint the selected span of a pane's line in inverse video, padding the line out first so a selection past its end still shows. `pan` is the first character column on screen. */
 	private highlighted(pane: ScrollTarget, text: string, line: number, pan: number, width: number): string {
-		if (this.selection?.pane !== pane) return text;
-		const [start, end] = ordered(this.selection);
-		if (line < start.line || line > end.line) return text;
-		const from = Math.max(0, (line === start.line ? start.col : 0) - pan);
-		const to = Math.min(width - 1, (line === end.line ? end.col : Number.POSITIVE_INFINITY) - pan);
-		if (from > to) return text;
-		const padded = fitToWidth(text, width);
-		const span = stripTerminalSequences(sliceByColumn(padded, from, to - from + 1));
-		return sliceByColumn(padded, 0, from) + this.theme.inverse(span) + sliceByColumn(padded, to + 1, width - to - 1);
+		return highlightSelection(text, line, width, this.selections[pane].current, (span) => this.theme.inverse(span), pan);
 	}
 
 	/** Render the code lines, noting which ones run past the right edge at this pan. */
@@ -636,7 +583,7 @@ export class AskForm implements Component, Focusable {
 	/** Paint the text over the code: the fence language on the left and the visible line range on the right. */
 	private codeHeader(preview: PreviewWindow, width: number, shownCount: number, total: number): string {
 		const first = total === 0 ? 0 : preview.offset + 1;
-		const copied = Date.now() < this.copiedUntil;
+		const copied = this.feedback.active();
 		const range = copied ? COPIED_LABEL : `lines ${first}–${preview.offset + shownCount} of ${total}`;
 		const lang = preview.lang ?? "";
 		const gap = Math.max(1, width - visibleWidth(lang) - visibleWidth(range));

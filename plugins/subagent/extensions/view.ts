@@ -30,8 +30,8 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { clamp } from "../../shared/clamp.ts";
-import { copyToClipboard } from "../../shared/clipboard.ts";
-import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
+import { CopyFeedback } from "../../shared/copy-feedback.ts";
+import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import type { AskQuestion } from "../../ask/api.ts";
 import { ActionLog, ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/api.ts";
 import {
@@ -64,8 +64,6 @@ const FIXED_LINES = 3;
 const HELP_LINE = "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close";
 /** Columns the box frame adds left of the view's own lines: the border and one space. */
 const BOX_LEFT = 2;
-/** How long the help line reads "copied" after a drag copies text. */
-const COPIED_MS = 1500;
 /** Columns one ← or → key (or one shift+wheel tick) pans, matching the actions panel. */
 export const PAN_STEP = 8;
 
@@ -216,16 +214,21 @@ export class RunListView {
 	private busy: Promise<void> | undefined;
 	/** The run drawn on each line of the last render, by line index, with undefined for the other lines. */
 	private lineRuns: (Run | undefined)[] = [];
-	/** The lines of the last render, unstyled, with their width, for mapping the pointer to text. */
-	private painted: { lines: string[]; width: number } = { lines: [], width: 0 };
+	/** The lines of the last render, unstyled, for mapping the pointer to text. */
+	private painted: PaintedText = { lines: [], x: BOX_LEFT, y: BOX_TOP, width: 0, height: 0, top: 0, pan: 0 };
 	private readonly selection = new TextSelection();
-	private copiedUntil = 0;
-	private copiedTimer: ReturnType<typeof setTimeout> | undefined;
+	private readonly feedback: CopyFeedback;
 	private readonly deps: RunListDeps;
 	private readonly unsubscribe: () => void;
 
 	constructor(deps: RunListDeps) {
 		this.deps = deps;
+		this.feedback = new CopyFeedback({
+			requestRender: deps.requestRender,
+			terminal: deps.terminal,
+			copy: deps.copy,
+			now: deps.now,
+		});
 		this.unsubscribe = deps.registry.on("change", () => {
 			this.clamp();
 			deps.requestRender();
@@ -235,7 +238,7 @@ export class RunListView {
 	/** Stop listening to the registry. */
 	dispose(): void {
 		this.unsubscribe();
-		if (this.copiedTimer) clearTimeout(this.copiedTimer);
+		this.feedback.dispose();
 	}
 
 	/** Show `message` above the key line until the next key. */
@@ -295,7 +298,7 @@ export class RunListView {
 		if (view.below > 0) rows.push(this.dimLine(`↓ ${view.below} more`));
 		this.lineRuns = [undefined, ...rowRuns];
 		const lines = ["", ...rows, ...notice, "", this.statusLine()];
-		this.painted = { lines: lines.map(stripTerminalSequences), width };
+		this.painted = { lines: lines.map(stripTerminalSequences), x: BOX_LEFT, y: BOX_TOP, width, height: lines.length, top: 0, pan: 0 };
 		return lines.map((line, index) => highlightSelection(line, index, width, this.selection.current, this.deps.inverse));
 	}
 
@@ -359,14 +362,14 @@ export class RunListView {
 			return { handled: true, render: true };
 		}
 		if (this.selection.dragging) {
-			const { result, copy } = this.selection.drag(event, (x, y, edges) => this.cellAt(x, y, edges), this.painted.lines);
-			if (copy !== undefined) this.copy(copy);
+			const { result, copy } = this.selection.drag(event, (x, y, edges) => cellAt(this.painted, x, y, edges), this.painted.lines);
+			if (copy !== undefined) this.feedback.copy(copy);
 			return result;
 		}
-		if (event.type !== "press" && event.type !== "click") return undefined;
+		if (event.type !== "press" && event.type !== "click") return { handled: true };
 		if (this.busy) return { handled: true };
 		if (event.type === "press") {
-			const cell = event.button === "left" ? this.cellAt(event.x, event.y, false) : undefined;
+			const cell = event.button === "left" ? cellAt(this.painted, event.x, event.y, false) : undefined;
 			this.selection.press(cell);
 			const index = this.runIndexAt(event.y);
 			if (index !== undefined) {
@@ -383,33 +386,10 @@ export class RunListView {
 		return { handled: true, render: true };
 	}
 
-	/** Map a boxed point to the view cell under it; with `clampEdges` a point outside snaps to the nearest cell. */
-	private cellAt(x: number, y: number, clampEdges: boolean): Cell | undefined {
-		const { lines, width } = this.painted;
-		if (lines.length === 0) return undefined;
-		const col = x - BOX_LEFT;
-		const line = y - BOX_TOP;
-		const inside = col >= 0 && col < width && line >= 0 && line < lines.length;
-		if (!clampEdges && !inside) return undefined;
-		return { line: clamp(line, 0, lines.length - 1), col: clamp(col, 0, width - 1) };
-	}
-
 	/** The last row: `copied` for a moment after a drag copies text, else the key line with the pan in front while one is in effect. */
 	private statusLine(): string {
-		if (this.deps.now() < this.copiedUntil) return this.deps.success("copied");
+		if (this.feedback.active()) return this.deps.success("copied");
 		return this.deps.dim(this.pan > 0 ? `→ ${this.pan} · ${HELP_LINE}` : HELP_LINE);
-	}
-
-	/** Put `text` on the clipboard and show `copied` in place of the key line for `COPIED_MS`, with a redraw when that lapses. */
-	private copy(text: string): void {
-		if (text === "") return;
-		const { copy, terminal, requestRender, now } = this.deps;
-		if (copy) copy(text);
-		else if (terminal) void copyToClipboard(text, terminal);
-		this.copiedUntil = now() + COPIED_MS;
-		if (this.copiedTimer) clearTimeout(this.copiedTimer);
-		this.copiedTimer = setTimeout(requestRender, COPIED_MS);
-		this.copiedTimer.unref?.();
 	}
 
 	/** The selection index of the run drawn on boxed line `y` of the last render, if that line holds one. */

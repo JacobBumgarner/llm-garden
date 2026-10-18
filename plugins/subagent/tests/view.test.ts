@@ -709,7 +709,7 @@ test("the wheel moves the selection a run a tick and shift+wheel pans", () => {
 	assert.match(view.render(60).at(-1) ?? "", /^→ 8 · /, "wheel-up with shift pans right");
 	wheel(1, true);
 	assert.match(view.render(60).at(-1) ?? "", /^↑↓ select/);
-	assert.equal(view.handleMouse({ ...({} as TuiMouseEvent), type: "move", button: "none" }), undefined);
+	assert.deepEqual(view.handleMouse({ ...({} as TuiMouseEvent), type: "move", button: "none" }), { handled: true });
 });
 
 test("a press on a run row selects it and a left click opens its actions; other rows swallow the click", async () => {

@@ -343,7 +343,7 @@ describe("scrolling", () => {
 		// Answer lines alternate with blanks, so three rows up moves the first visible line number by one or two.
 		const after = firstLine(panel);
 		assert.ok(after === before - 1 || after === before - 2, `${after} vs ${before}`);
-		assert.equal(panel.handleMouse({ type: "click" } as TuiMouseEvent), undefined);
+		assert.deepEqual(panel.handleMouse({ type: "click" } as TuiMouseEvent), { handled: true });
 	});
 
 	it("pins again when a question is sent", async () => {

@@ -12,6 +12,7 @@ import {
 	type TuiMouseEventResult,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { clamp } from "./clamp.ts";
 
 /** A position in a list of lines: line index, character column into that line. */
 export interface Cell {
@@ -48,23 +49,53 @@ export function selectedText(lines: string[], selection: { anchor: Cell; focus: 
 	return out.join("\n");
 }
 
-/** Paint the selected span of line `line` with `inverse`, padding `text` to `width` first so a selection past its end still shows. */
+/**
+ * Paint the selected span of line `line` with `inverse`, padding `text` to `width` first so a selection past its end still shows.
+ * Selection columns are text columns, so `pan` is subtracted to get the columns of `text`.
+ */
 export function highlightSelection(
 	text: string,
 	line: number,
 	width: number,
 	selection: { anchor: Cell; focus: Cell } | undefined,
 	inverse: (text: string) => string,
+	pan = 0,
 ): string {
 	if (!selection) return text;
 	const [start, end] = ordered(selection);
 	if (line < start.line || line > end.line) return text;
-	const from = line === start.line ? start.col : 0;
-	const to = Math.min(width - 1, line === end.line ? end.col : Number.POSITIVE_INFINITY);
+	const from = Math.max(0, (line === start.line ? start.col : 0) - pan);
+	const to = Math.min(width - 1, (line === end.line ? end.col : Number.POSITIVE_INFINITY) - pan);
 	if (from > to) return text;
 	const padded = text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 	const span = stripTerminalSequences(sliceByColumn(padded, from, to - from + 1));
 	return sliceByColumn(padded, 0, from) + inverse(span) + sliceByColumn(padded, to + 1, width - to - 1);
+}
+
+/** The text area as last drawn: unstyled lines, its component-local origin and size, and the first visible line and column. */
+export interface PaintedText {
+	lines: string[];
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	top: number;
+	pan: number;
+}
+
+/**
+ * Map a component-local point to a cell of `painted`. A point outside the area, or on a row below the last
+ * line, gives undefined, unless `clampEdges` snaps it to the nearest cell.
+ */
+export function cellAt(painted: PaintedText, x: number, y: number, clampEdges: boolean): Cell | undefined {
+	const { lines, top, pan, width, height } = painted;
+	if (lines.length === 0) return undefined;
+	const bodyX = x - painted.x;
+	const bodyY = y - painted.y;
+	const inside = bodyX >= 0 && bodyX < width && bodyY >= 0 && bodyY < height && top + bodyY < lines.length;
+	if (!clampEdges && !inside) return undefined;
+	const line = clamp(top + clamp(bodyY, 0, height - 1), 0, lines.length - 1);
+	return { line, col: pan + clamp(bodyX, 0, width - 1) };
 }
 
 /** Maps a component-local point to a cell. With `clampEdges` a point outside snaps to the nearest cell, else it returns undefined. */

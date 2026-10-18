@@ -22,14 +22,11 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { clamp } from "../../shared/clamp.ts";
-import { copyToClipboard } from "../../shared/clipboard.ts";
+import { CopyFeedback } from "../../shared/copy-feedback.ts";
 import { editorTheme } from "../../shared/editor-theme.ts";
 import type { PromptDisposition } from "../../shared/rpc.ts";
-import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
+import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import { Viewport } from "../../shared/viewport.ts";
-
-export { selectedText } from "../../shared/selection.ts";
 
 export const TOGGLE_KEY = "alt+/";
 /** Share of the terminal's rows the panel takes. The overlay clips lines past this, so the panel sizes its body to fit and keeps the editor on screen. */
@@ -43,8 +40,6 @@ export const OVERLAY_OPTIONS = {
 	maxHeight: `${HEIGHT_RATIO * 100}%`,
 	margin: { top: 1, right: 1 },
 } as const;
-/** How long the status line reads "copied" after a copy. */
-const COPIED_MS = 1500;
 
 /** Rows taken by the top rule, the status line, and the bottom rule. */
 const FRAME_ROWS = 3;
@@ -153,13 +148,20 @@ export class AsidePanel implements Component, Focusable {
 	private readonly viewport = new Viewport();
 	private bodyRows = 10;
 	private readonly selection = new TextSelection();
-	private copiedUntil = 0;
-	/** The transcript as last painted, unstyled, with the scroll offset and width, for mapping the pointer to text. */
-	private painted: { lines: string[]; top: number; width: number } = { lines: [], top: 0, width: 0 };
+	private readonly feedback: CopyFeedback;
+	/** The transcript as last painted, unstyled, for mapping the pointer to text. */
+	private painted: PaintedText = { lines: [], x: FRAME_X, y: 1, width: 0, height: 0, top: 0, pan: 0 };
 	private _focused = false;
 
 	constructor(options: PanelOptions) {
 		this.o = options;
+		const send = options.copyToClipboard;
+		this.feedback = new CopyFeedback({
+			requestRender: () => options.tui.requestRender(),
+			terminal: options.tui.terminal,
+			copy: send ? (text) => void send(text, options.tui.terminal) : undefined,
+			now: options.now,
+		});
 		this.editor = new Editor(options.tui, editorTheme(options.theme));
 		this.unsubscribe = options.backend.subscribe({
 			event: (ev) => this.onEvent(ev),
@@ -192,45 +194,22 @@ export class AsidePanel implements Component, Focusable {
 			return { handled: true, render: true };
 		}
 		if (this.selection.dragging) {
-			const { result, copy } = this.selection.drag(event, (x, y, edges) => this.cellAt(x, y, edges), this.painted.lines);
-			if (copy !== undefined) this.copy(copy);
+			const { result, copy } = this.selection.drag(event, (x, y, edges) => cellAt(this.painted, x, y, edges), this.painted.lines);
+			if (copy !== undefined) this.feedback.copy(copy);
 			return result;
 		}
-		if (event.button !== "left") return undefined;
+		if (event.button !== "left") return { handled: true };
 		if (event.type === "press") {
-			const cell = this.cellAt(event.x, event.y, false);
+			const cell = cellAt(this.painted, event.x, event.y, false);
 			this.selection.press(cell);
 			return { capture: cell !== undefined, handled: true, render: true };
 		}
 		if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
-			const cell = this.cellAt(event.x, event.y, false);
-			if (cell) this.copy(this.selection.selectLine(this.painted.lines, cell.line));
+			const cell = cellAt(this.painted, event.x, event.y, false);
+			if (cell) this.feedback.copy(this.selection.selectLine(this.painted.lines, cell.line));
 			return { handled: true, render: true };
 		}
-		return undefined;
-	}
-
-	/** Map a component-local point to the transcript cell under it; with `clampEdges` a point outside snaps to the nearest cell. */
-	private cellAt(x: number, y: number, clampEdges: boolean): Cell | undefined {
-		const { lines, top, width } = this.painted;
-		if (lines.length === 0) return undefined;
-		const bodyX = x - FRAME_X;
-		const bodyY = y - 1;
-		const inside = bodyX >= 0 && bodyX < width && bodyY >= 0 && bodyY < this.bodyRows && top + bodyY < lines.length;
-		if (!clampEdges && !inside) return undefined;
-		const line = clamp(top + clamp(bodyY, 0, this.bodyRows - 1), 0, lines.length - 1);
-		return { line, col: clamp(bodyX, 0, width - 1) };
-	}
-
-	private now(): number {
-		return (this.o.now ?? Date.now)();
-	}
-
-	private copy(text: string): void {
-		if (text === "") return;
-		void (this.o.copyToClipboard ?? copyToClipboard)(text, this.o.tui.terminal);
-		this.copiedUntil = this.now() + COPIED_MS;
-		setTimeout(() => this.o.tui.requestRender(), COPIED_MS).unref?.();
+		return { handled: true };
 	}
 
 	render(width: number): string[] {
@@ -242,14 +221,14 @@ export class AsidePanel implements Component, Focusable {
 
 		const lines = this.transcriptLines(inner);
 		const top = this.viewport.layout(lines.length, this.bodyRows);
-		this.painted = { lines: lines.map(stripTerminalSequences), top, width: inner };
+		this.painted = { lines: lines.map(stripTerminalSequences), x: FRAME_X, y: 1, width: inner, height: this.bodyRows, top, pan: 0 };
 		const body = lines
 			.slice(top, top + this.bodyRows)
 			.map((l, i) => highlightSelection(sliceByColumn(l, 0, inner), top + i, inner, this.selection.current, (s) => theme.inverse(s)));
 		while (body.length < this.bodyRows) body.push("");
 
 		const status =
-			this.now() < this.copiedUntil
+			this.feedback.active()
 				? theme.fg("success", "copied")
 				: theme.fg("dim", `${this.o.model} · esc hide`);
 		return this.frame(width, [...body, ...editorLines, status]);
@@ -260,6 +239,7 @@ export class AsidePanel implements Component, Focusable {
 	}
 
 	dispose(): void {
+		this.feedback.dispose();
 		this.unsubscribe();
 	}
 
