@@ -6,7 +6,6 @@ import type { Run } from "../extensions/types.ts";
 import {
 	createLiveView,
 	createStopAllHandler,
-	entryCapacity,
 	registerViewControls,
 	RunListView,
 	TOGGLE_KEY,
@@ -347,7 +346,7 @@ test("rows list runs newest first with the selection marked and the key line las
 	);
 	assert.equal(lines[0], "");
 	assert.equal(lines[2], `  [> ${formatOverlayRow(makeRun({ id: "new", startedAt: NOW - 1_000 }), NOW, 56)}]`);
-	assert.match(lines[3], /^ {4}\{paused:⏸\} glm ask {2}Check ask {2}\{paused:paused\}: 2 questions/);
+	assert.match(lines[3], /^ {4}\{paused:⏸\} glm ask {2}Check ask {2}\{paused:paused\}: 2 q/);
 	assert.match(lines[4], /^ {4}\{running:▶\} glm old /);
 	assert.equal(lines.at(-1), "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close");
 });
@@ -566,50 +565,53 @@ test("an empty list draws both headers with (none) and ignores the arrow keys", 
 	assert.deepEqual(view.render(60).slice(0, 6), expected);
 });
 
-test("a list taller than the overlay scrolls with the selection and counts the hidden entries", async () => {
-	const { registry, view, press, setRows } = setupView();
-	registry.runs = Array.from({ length: 12 }, (_, index) => makeRun({ id: `r${index}`, startedAt: NOW - index * 1_000 }));
-	setRows(25);
+/** Twelve runs under a 25-row terminal, which leaves ten body lines. */
+const BODY_LINES = 10;
+function tallList() {
+	const setup = setupView();
+	setup.registry.runs = Array.from({ length: 12 }, (_, index) => makeRun({ id: `r${index}`, startedAt: NOW - index * 1_000 }));
+	setup.setRows(25);
+	return setup;
+}
+
+test("a list taller than the overlay paints one page and scrolls to follow the selection", async () => {
+	const { view, press } = tallList();
 	const top = view.render(60);
 	assert.equal(top.length, Math.floor(25 * 0.6) - 2, "the overlay's share of the terminal minus the box edges");
-	assert.equal(entryCapacity(25, 0), top.length - 3);
+	assert.equal(top.length - 3, BODY_LINES);
 	assert.match(top[1], /RUNNING/);
-	assert.match(top.at(-3) ?? "", /^ {2}↓ \d+ more$/);
-	assert.ok(!top.some((line) => /↑ \d+ more/.test(line)));
+	assert.ok(!top.some((line) => /more$/.test(line)), "no more-rows markers");
 	for (let step = 0; step < 11; step++) await press("down");
 	const bottom = view.render(60);
 	assert.equal(bottom.length, top.length);
-	assert.match(bottom[1], /^ {2}↑ \d+ more$/);
-	assert.ok(bottom.some((line) => line.includes("[> ") && line.includes("r11")));
+	assert.ok(!bottom.some((line) => line.includes("RUNNING")), "the header scrolled off");
+	assert.match(bottom[BODY_LINES], /\[> ▶ glm r11/, "the last run sits on the last body line");
+	await press("home");
+	assert.match(view.render(60)[1], /RUNNING/, "the first run brings its header back");
 });
 
-test("the selection stays visible when down passes the window", async () => {
-	const { registry, view, press, setRows } = setupView();
-	registry.runs = Array.from({ length: 12 }, (_, index) => makeRun({ id: `r${index}`, startedAt: NOW - index * 1_000 }));
-	setRows(25);
+test("the selection stays visible when down passes the page", async () => {
+	const { view, press } = tallList();
 	for (let step = 0; step < 8; step++) {
 		await press("down");
 		const lines = view.render(60);
 		assert.equal(lines.filter((line) => line.includes("[> ")).length, 1);
 		assert.ok(lines.length <= 13);
 	}
-	assert.match(view.render(60).join("\n"), /↑ \d+ more[\s\S]*↓ \d+ more/);
 });
 
 test("page, home, and end keys move the selection by a page and to the ends without wrapping", async () => {
-	const { registry, view, press, setRows } = setupView();
-	registry.runs = Array.from({ length: 12 }, (_, index) => makeRun({ id: `r${index}`, startedAt: NOW - index * 1_000 }));
-	setRows(25);
+	const { view, press } = tallList();
 	const selectedId = () => /\[> ▶ glm (r\d+)/.exec(view.render(60).join("\n"))?.[1];
 	assert.equal(selectedId(), "r0");
 	await press("pageDown");
-	assert.equal(selectedId(), `r${entryCapacity(25, 0)}`);
+	assert.equal(selectedId(), `r${BODY_LINES}`);
 	await press("end");
 	assert.equal(selectedId(), "r11");
 	await press("pageDown");
 	assert.equal(selectedId(), "r11", "end does not wrap");
 	await press("pageUp");
-	assert.equal(selectedId(), `r${11 - entryCapacity(25, 0)}`);
+	assert.equal(selectedId(), `r${11 - BODY_LINES}`);
 	await press("home");
 	assert.equal(selectedId(), "r0");
 	await press("pageUp");
@@ -631,7 +633,10 @@ test("left and right pan the rows up to the widest row's end, 0 pans back, and t
 	assert.ok(full > fit, "the fixture row overflows the overlay");
 	const row = () => view.render(60)[2];
 	assert.match(row(), /^ {2}\[> ▶ glm wide {2}A label/);
-	assert.match(row(), /…/, "the unpanned row cuts the label");
+	assert.ok(!row().includes("…"), "the unpanned row is never cut");
+	const natural = formatOverlayRow(registry.runs[0], NOW, fit);
+	assert.equal(row(), `  [> ${natural.slice(0, fit)}]`, "the unpanned row shows a contiguous prefix");
+	assert.ok(!row().includes("ago"), "the age sits off the right edge");
 
 	await press("right");
 	assert.match(row(), /^ {2}\[> /, "the marker stays put");
@@ -746,4 +751,20 @@ test("a drag highlights the text it covers in inverse video and copies it on rel
 	mouse("release", 0, 1);
 	assert.equal(view.render(60)[1], "  RUNNING");
 	await press("escape");
+});
+
+test("a drag from the first page to past the bottom scrolls and selects rows on the second page", async () => {
+	const { view, log } = tallList();
+	view.render(60);
+	const mouse = (type: TuiMouseEvent["type"], x: number, y: number) =>
+		view.handleMouse({ ...({} as TuiMouseEvent), type, button: "left", x, y, shift: false, alt: false, ctrl: false });
+	mouse("press", 0, 1);
+	mouse("drag", 50, BODY_LINES + 1);
+	await new Promise((resolve) => setTimeout(resolve, 160));
+	const lines = view.render(60);
+	assert.ok(!lines.some((line) => line.includes("RUNNING")), "the view scrolled past the first page");
+	mouse("release", 50, BODY_LINES + 1);
+	const copied = log.copies.at(-1) ?? "";
+	assert.ok(copied.startsWith("  RUNNING\n"), "the copy starts on the first page");
+	assert.ok(copied.includes("r11"), "the copy reaches rows only the second page shows");
 });

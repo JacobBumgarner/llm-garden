@@ -13,7 +13,7 @@ import {
 	formatDeliverySection,
 	formatPausedResult,
 	layoutOverlay,
-	type OverlayEntry,
+	overlayRowWidth,
 	overlayStateColor,
 	formatProgressLine,
 	formatRunResult,
@@ -28,7 +28,6 @@ import {
 	PER_TASK_OUTPUT_CAP,
 	snapshotRun,
 	truncateOutput,
-	windowEntries,
 } from "../extensions/format.ts";
 import { detectPause } from "../extensions/pause.ts";
 import type { Run, SingleResult } from "../extensions/types.ts";
@@ -316,11 +315,14 @@ test("formatOverlayRow shows paused questions and the state of finished rows", (
 	assert.match(formatOverlayRow(liveRun({ state: "failed" }), NOW, 60), /^✗ glm sub-bddd {2}Say pong {2}failed +30s ago$/);
 });
 
-test("formatOverlayRow truncates the detail so the age stays visible", () => {
-	const row = formatOverlayRow(liveRun({ lastTool: { name: "bash", args: { command: "x".repeat(200) } } }), NOW, 40);
-	assert.equal(row.length, 40);
-	assert.ok(row.endsWith("30s ago"));
-	assert.ok(row.includes("…"));
+test("formatOverlayRow grows past the requested width instead of cutting the detail", () => {
+	const longRun = liveRun({ label: "L".repeat(120) });
+	const row = formatOverlayRow(longRun, NOW, 40);
+	assert.equal(row.length, overlayRowWidth(longRun, NOW));
+	assert.ok(row.length > 120);
+	assert.ok(row.endsWith(" 30s ago"));
+	assert.ok(!row.includes("…"));
+	assert.ok(row.includes("L".repeat(120)));
 });
 
 test("formatDeliverySection heads the result with the label", () => {
@@ -387,52 +389,7 @@ test("formatOverlayRow paints only the icon of a running row", () => {
 	assert.equal(row.replace(/[<>]/g, "").length, 60);
 });
 
-test("formatOverlayRow keeps the width when painting a truncated row", () => {
+test("formatOverlayRow keeps the natural width when painting a row wider than the request", () => {
 	const row = formatOverlayRow(liveRun({ state: "paused" }), NOW, 24, bracket);
-	assert.equal(row.replace(/[<>]/g, "").length, 24);
-});
-
-const windowList = (count: number): OverlayEntry[] => Array.from({ length: count }, () => ({ kind: "gap" }));
-
-test("windowEntries returns every entry without markers when the list fits", () => {
-	const entries = windowList(5);
-	assert.deepEqual(windowEntries(entries, 2, 5, 0), { start: 0, entries, above: 0, below: 0 });
-});
-
-test("windowEntries with the selection at the top hides only entries below", () => {
-	const view = windowEntries(windowList(20), 0, 8, 0);
-	assert.equal(view.entries.length, 7);
-	assert.deepEqual([view.start, view.above, view.below], [0, 0, 13]);
-});
-
-test("windowEntries with the selection in the middle hides entries on both sides", () => {
-	const view = windowEntries(windowList(20), 10, 8, 0);
-	assert.equal(view.entries.length, 6);
-	assert.equal(view.above + view.entries.length + view.below, 20);
-	assert.ok(view.above > 0 && view.below > 0);
-	assert.ok(10 >= view.start && 10 < view.start + view.entries.length);
-});
-
-test("windowEntries with the selection at the bottom hides only entries above", () => {
-	const view = windowEntries(windowList(20), 19, 8, 0);
-	assert.equal(view.entries.length, 7);
-	assert.deepEqual([view.start, view.above, view.below], [13, 13, 0]);
-});
-
-test("windowEntries keeps the window still while the selection moves inside it", () => {
-	const entries = windowList(20);
-	let view = windowEntries(entries, 10, 8, 0);
-	const { start } = view;
-	for (const selected of [start + 1, start + 2, start + 1]) {
-		view = windowEntries(entries, selected, 8, view.start);
-		assert.equal(view.start, start);
-	}
-	view = windowEntries(entries, start - 1, 8, view.start);
-	assert.equal(view.start, start - 1);
-});
-
-test("windowEntries pulls the window back when the list shrinks", () => {
-	const view = windowEntries(windowList(10), 9, 8, 15);
-	assert.equal(view.below, 0);
-	assert.equal(view.entries.length + view.above, 10);
+	assert.equal(row.replace(/[<>]/g, "").length, overlayRowWidth(liveRun({ state: "paused" }), NOW));
 });

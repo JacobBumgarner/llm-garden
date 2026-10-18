@@ -369,21 +369,21 @@ export function overlayStateColor(state: Run["state"]): OverlayColor {
 }
 
 /**
- * Render one overlay row, exactly `width` characters wide: state icon, agent,
- * id, label, progress or state, and the age of last activity at the right edge.
- * `paint` wraps the icon and the state word of the detail after the row is
- * fitted on plain text, so the visible width does not change. A running row has
- * no state word, so only its icon is painted.
+ * Render one overlay row at `width` characters, or wider when the row needs
+ * more: state icon, agent, id, label, progress or state, and the age of last
+ * activity one space after the detail, or at the right edge when `width` leaves
+ * room. Nothing is cut. `paint` wraps the icon and the state word of the detail
+ * after the row is laid out on plain text, so the visible width does not change.
+ * A running row has no state word, so only its icon is painted.
  */
 export function formatOverlayRow(run: Run, now: number, width: number, paint?: OverlayPaint): string {
 	const age = overlayAge(run, now);
 	const head = overlayHead(run);
-	const fitted = [...cutText(`${head}${overlayDetail(run)}`, Math.max(0, width - age.length - 1))];
-	const gap = Math.max(1, width - fitted.length - age.length);
+	const chars = [...`${head}${overlayDetail(run)}`];
+	const gap = Math.max(1, width - chars.length - age.length);
 	const word = { start: [...head].length, length: stateWord(run).length };
-	const colored = paint ? paintSegments(run.state, fitted, word, paint) : fitted.join("");
-	const rest = [...`${" ".repeat(gap)}${age}`].slice(0, Math.max(width - fitted.length, 0)).join("");
-	return `${colored}${rest}`;
+	const colored = paint ? paintSegments(run.state, chars, word, paint) : chars.join("");
+	return `${colored}${" ".repeat(gap)}${age}`;
 }
 
 function overlayAge(run: Run, now: number): string {
@@ -441,42 +441,6 @@ export function layoutOverlay(runs: Run[]): OverlayEntry[] {
 /** Wrap a group's runs as run entries, or give one `none` entry for an empty group. */
 function groupEntries(runs: Run[]): OverlayEntry[] {
 	return runs.length === 0 ? [{ kind: "none" }] : runs.map((run) => ({ kind: "run", run }));
-}
-
-/** The slice of overlay entries to draw, and how many entries the slice hides on each side. */
-export interface EntryWindow {
-	start: number;
-	entries: OverlayEntry[];
-	above: number;
-	below: number;
-}
-
-/** Return the exclusive end index of the window that begins at `start`, after the markers take their slots. */
-function windowEnd(total: number, capacity: number, start: number): number {
-	const room = capacity - (start > 0 ? 1 : 0);
-	if (start + room >= total) return total;
-	return start + Math.max(room - 1, 1);
-}
-
-/**
- * Pick the slice of `entries` to draw in `capacity` lines so the entry at
- * `selectedIndex` (or none for -1) stays visible. The window begins at `start`
- * and moves only when the selection would leave it, and never leaves blank
- * lines below the last entry. A `↑ N more` marker takes one line of capacity
- * when entries hide above, and a `↓ N more` marker takes one when they hide
- * below, so the returned entries are fewer than `capacity` by the markers.
- * Return the adjusted `start` to pass back on the next call.
- */
-export function windowEntries(entries: OverlayEntry[], selectedIndex: number, capacity: number, start: number): EntryWindow {
-	const total = entries.length;
-	const lines = Math.max(capacity, 1);
-	if (total <= lines) return { start: 0, entries, above: 0, below: 0 };
-	let first = Math.max(0, Math.min(start, total - 1));
-	if (selectedIndex >= 0 && selectedIndex < first) first = selectedIndex;
-	while (first < total - 1 && selectedIndex >= 0 && selectedIndex >= windowEnd(total, lines, first)) first++;
-	while (first > 0 && windowEnd(total, lines, first - 1) === total) first--;
-	const end = windowEnd(total, lines, first);
-	return { start: first, entries: entries.slice(first, end), above: first, below: total - end };
 }
 
 /** Return the first line of a text. */

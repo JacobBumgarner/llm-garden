@@ -2,11 +2,12 @@
  * Live view: the `subagent:live` event that publishes the running runs, the
  * `/subagents` overlay (the shared overlay draws its frame) that lists every run of the
  * session, running runs above finished ones under headers that always draw,
- * scrolling the list to fit the height pi gives the overlay, with keys to
+ * scrolling the list through a viewport to fit the height pi gives the overlay, with keys to
  * stop, steer, or answer the selected one, or open its actions panel (the
  * focus-mode panel over the run's own tool calls). A click on a run row
  * selects it and opens its actions panel, and a drag selects text and copies
- * it to the clipboard, as in the aside panel. The list pans sideways
+ * it to the clipboard, as in the aside panel, scrolling on while the pointer is held past the
+ * top or bottom edge. The list pans sideways
  * with ←/→ (or shift+wheel) to read long labels, `0` pans back,
  * PgUp/PgDn, Home/End, and the wheel move the selection. The stop-all paths:
  * `/subagents stop`, the overlay `s` key, and a double Esc, which arrives as
@@ -20,10 +21,10 @@
 
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, sliceByColumn, stripTerminalSequences, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { clamp } from "../../shared/clamp.ts";
 import { CopyFeedback } from "../../shared/copy-feedback.ts";
 import { openOverlay, OverlaySlot } from "../../shared/overlay.ts";
-import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
+import { cellAt, DragAutoScroll, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
+import { Viewport } from "../../shared/viewport.ts";
 import type { AskQuestion } from "../../ask/api.ts";
 import { ActionLog, ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/api.ts";
 import {
@@ -33,7 +34,6 @@ import {
 	type OverlayPaint,
 	overlayRowWidth,
 	overlayStateColor,
-	windowEntries,
 } from "./format.ts";
 import { isLive } from "./registry.ts";
 import type { Run } from "./types.ts";
@@ -51,6 +51,8 @@ const OVERLAY_HEIGHT_FRACTION = 0.6;
 const BOX_EDGES = 2;
 /** The leading blank, the blank above the help line, and the help line. */
 const FIXED_LINES = 3;
+/** Rows of the leading blank above the scrolling body. */
+const BODY_TOP = 1;
 const HELP_LINE = "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close";
 /** Columns one ← or → key (or one shift+wheel tick) pans, matching the actions panel. */
 export const PAN_STEP = 8;
@@ -112,8 +114,8 @@ export function createLiveView(
 }
 
 /** Return the lines left for list entries: the overlay's share of `rows`, minus the box edges, the fixed lines, and `noticeLines`. */
-export function entryCapacity(rows: number, noticeLines: number): number {
-	return Math.floor(rows * OVERLAY_HEIGHT_FRACTION) - BOX_EDGES - FIXED_LINES - noticeLines;
+function visibleRows(rows: number, noticeLines: number): number {
+	return Math.max(1, Math.floor(rows * OVERLAY_HEIGHT_FRACTION) - BOX_EDGES - FIXED_LINES - noticeLines);
 }
 
 /** The dialogs the overlay opens. `ctx.ui` satisfies it. */
@@ -163,30 +165,40 @@ type RunAction = (run: Run) => Promise<void>;
  * and the selected row takes the highlight alone. The arrow keys move a
  * selection over runs and skip headers, gaps, and `(none)` lines. Keys act on
  * the selected run: space opens its actions panel, `s` stops it after a
- * confirm, `m` steers it, `a` answers a paused run, esc closes. Runs that do not fit the overlay's height scroll
- * with the selection, and dim `↑ N more` and `↓ N more` lines count the
- * entries hidden on each side. PgUp/PgDn move the selection by a page,
+ * confirm, `m` steers it, `a` answers a paused run, esc closes. Every entry is
+ * painted, and a viewport scrolls them to fit the overlay's height, moving the
+ * least that keeps the selected run in view. PgUp/PgDn move the selection by a page,
  * Home/End to the first and last run, and the wheel by one run a tick.
  * Rows wider than the overlay pan sideways with ←/→ or shift+wheel, by
  * `PAN_STEP` columns, up to the widest row's end; `0` pans back. The help
  * line reports the pan while one is in effect. Mouse rows arrive relative to
  * the text area, so a press on the run row drawn on line `y` of `render` selects the run, and a left click on one opens its actions panel.
  * A drag from a press highlights the text it covers in inverse video and
- * copies it on release. The help line reads `copied` for a moment after, as
+ * copies it on release. A drag held past the top or bottom of the list scrolls it
+ * and keeps selecting. The help line reads `copied` for a moment after, as
  * in the actions panel. The highlight stays until the next press or key.
  */
 export class RunListView {
 	private selected = 0;
-	private windowStart = 0;
+	private readonly viewport = new Viewport();
+	/** Set when the selection moved, so the next render scrolls it into view. Scrolling the view by hand clears it. */
+	private follow = true;
 	private pan = 0;
 	private notice: string | undefined;
 	private busy: Promise<void> | undefined;
-	/** The run drawn on each line of the last render, by line index, with undefined for the other lines. */
+	/** The run drawn on each body line of the last render, by line index, with undefined for the other lines. */
 	private lineRuns: (Run | undefined)[] = [];
-	/** The lines of the last render, unstyled, for mapping the pointer to text. */
+	/** The whole body of the last render, unstyled, for mapping the pointer to text. */
 	private painted: PaintedText = { lines: [], x: 0, y: 0, width: 0, height: 0, top: 0, pan: 0 };
 	private readonly selection = new TextSelection();
 	private readonly feedback: CopyFeedback;
+	private readonly autoScroll = new DragAutoScroll({
+		scrollBy: (lines) => {
+			this.follow = false;
+			this.viewport.scrollBy(lines);
+		},
+		onTick: () => this.autoScrollTick(),
+	});
 	private readonly deps: RunListDeps;
 	private readonly unsubscribe: () => void;
 
@@ -207,7 +219,16 @@ export class RunListView {
 	/** Stop listening to the registry. */
 	dispose(): void {
 		this.unsubscribe();
+		this.autoScroll.dispose();
 		this.feedback.dispose();
+	}
+
+	/** Re-lay out after an auto-scroll step and pull the selection's focus to the cell under the held pointer. */
+	private autoScrollTick(): void {
+		const pointer = this.autoScroll.pointer;
+		this.painted.top = this.viewport.layout(this.painted.lines.length, this.painted.height);
+		if (pointer) this.selection.extend(cellAt(this.painted, pointer.x, pointer.y, true));
+		this.deps.requestRender();
 	}
 
 	/** Show `message` above the key line until the next key. */
@@ -248,27 +269,36 @@ export class RunListView {
 		const pad = " ".repeat(ROW_INDENT);
 		const entries = this.entries();
 		const notice = this.notice === undefined ? [] : [`${pad}${this.notice}`];
-		const selectedIndex = entries.findIndex((entry) => entry.kind === "run" && entry.run === selected);
-		const view = windowEntries(entries, selectedIndex, entryCapacity(this.deps.rows(), notice.length), this.windowStart);
-		this.windowStart = view.start;
 		const rowWidth = width - ROW_INDENT;
 		this.pan = Math.min(this.pan, this.maxPan(entries, rowWidth));
-		const rows = view.entries.map((entry) => {
+		const body = entries.map((entry) => {
 			if (entry.kind === "gap") return "";
 			if (entry.kind === "header") return this.dimLine(entry.title);
 			if (entry.kind === "none") return this.dimLine("(none)");
 			return `${pad}${this.row(entry.run, entry.run === selected, rowWidth)}`;
 		});
-		const rowRuns = view.entries.map((entry) => (entry.kind === "run" ? entry.run : undefined));
-		if (view.above > 0) {
-			rows.unshift(this.dimLine(`↑ ${view.above} more`));
-			rowRuns.unshift(undefined);
+		this.lineRuns = entries.map((entry) => (entry.kind === "run" ? entry.run : undefined));
+		const height = Math.min(body.length, visibleRows(this.deps.rows(), notice.length));
+		const top = this.layoutViewport(body.length, height, this.lineRuns.indexOf(selected));
+		const plain = body.map(stripTerminalSequences);
+		this.painted = { lines: plain, x: 0, y: BODY_TOP, width, height, top, pan: 0 };
+		const visible = body
+			.slice(top, top + height)
+			.map((line, index) => highlightSelection(line, top + index, width, this.selection.current, this.deps.inverse));
+		return ["", ...visible, ...notice, "", this.statusLine()];
+	}
+
+	/** Scroll the viewport the least that shows `selectedLine` when the selection just moved, then clamp it. Return the first visible line. */
+	private layoutViewport(bodyHeight: number, height: number, selectedLine: number): number {
+		const { viewport } = this;
+		viewport.pinned = false;
+		if (this.follow && selectedLine >= 0) {
+			if (selectedLine < viewport.top) viewport.top = selectedLine;
+			else if (selectedLine >= viewport.top + height) viewport.top = selectedLine - height + 1;
+			if (this.selected === 0 && selectedLine < height) viewport.top = 0;
 		}
-		if (view.below > 0) rows.push(this.dimLine(`↓ ${view.below} more`));
-		this.lineRuns = [undefined, ...rowRuns];
-		const lines = ["", ...rows, ...notice, "", this.statusLine()];
-		this.painted = { lines: lines.map(stripTerminalSequences), x: 0, y: 0, width, height: lines.length, top: 0, pan: 0 };
-		return lines.map((line, index) => highlightSelection(line, index, width, this.selection.current, this.deps.inverse));
+		this.follow = false;
+		return viewport.layout(bodyHeight, height);
 	}
 
 	/** The farthest pan that still shows the end of the widest row inside `width` columns (after the `> ` marker). */
@@ -282,12 +312,11 @@ export class RunListView {
 		return Math.max(0, widest - fit);
 	}
 
-	/** Render a row at the panned width and show the `fit` columns from the pan. The `> ` marker stays put. */
+	/** Render a row at its natural width, or the panned width when that is wider, and show the `fit` columns from the pan. The `> ` marker stays put. */
 	private row(run: Run, selected: boolean, width: number): string {
 		const fit = Math.max(width - 2, 1);
 		const now = this.deps.now();
-		// A row is formatted to exactly its width, so an unpanned row needs no slicing.
-		const panned = (text: string) => (this.pan > 0 ? sliceByColumn(text, this.pan, fit) : text);
+		const panned = (text: string) => sliceByColumn(text, this.pan, fit);
 		// unpainted: theme.fg resets the foreground at its end, which would cut the highlight short
 		if (selected) return this.deps.highlight(`> ${panned(formatOverlayRow(run, now, fit + this.pan))}`);
 		return `  ${panned(formatOverlayRow(run, now, fit + this.pan, this.deps.paint))}`;
@@ -297,6 +326,7 @@ export class RunListView {
 		if (this.busy) return;
 		this.notice = undefined;
 		this.selection.clear();
+		this.autoScroll.stop();
 		// The focused overlay owns input, so pi's shortcut router never sees the toggle chord while it is open.
 		if (matchesKey(data, "escape") || matchesKey(data, TOGGLE_KEY)) return this.deps.close();
 		if (matchesKey(data, "up")) return this.move(-1);
@@ -333,6 +363,10 @@ export class RunListView {
 		if (this.selection.dragging) {
 			const { result, copy } = this.selection.drag(event, (x, y, edges) => cellAt(this.painted, x, y, edges), this.painted.lines);
 			if (copy !== undefined) this.feedback.copy(copy);
+			if (!this.selection.dragging) this.autoScroll.stop();
+			else if (event.type === "drag" || event.type === "move") {
+				this.autoScroll.update(event, this.painted.y, this.painted.y + this.painted.height - 1);
+			}
 			return result;
 		}
 		if (event.type !== "press" && event.type !== "click") return { handled: true };
@@ -366,9 +400,11 @@ export class RunListView {
 		return this.deps.dim(this.pan > 0 ? `→ ${this.pan} · ${HELP_LINE}` : HELP_LINE);
 	}
 
-	/** The selection index of the run drawn on boxed line `y` of the last render, if that line holds one. */
+	/** The selection index of the run drawn on component line `y` of the last render, if that line holds one. */
 	private runIndexAt(y: number): number | undefined {
-		const run = this.lineRuns[y];
+		const bodyY = y - this.painted.y;
+		if (bodyY < 0 || bodyY >= this.painted.height) return undefined;
+		const run = this.lineRuns[this.painted.top + bodyY];
 		if (!run) return undefined;
 		const index = this.runs().indexOf(run);
 		return index === -1 ? undefined : index;
@@ -379,6 +415,7 @@ export class RunListView {
 		const count = this.runs().length;
 		if (count === 0) return;
 		this.selected = (this.selected + delta + count) % count;
+		this.follow = true;
 		this.deps.requestRender();
 	}
 
@@ -387,12 +424,13 @@ export class RunListView {
 		const count = this.runs().length;
 		if (count === 0) return;
 		this.selected = Math.max(0, Math.min(Math.floor(index), count - 1));
+		this.follow = true;
 		this.deps.requestRender();
 	}
 
 	/** Runs the selection jumps on PgUp/PgDn: the entry lines the overlay has, at least one. */
 	private pageSize(): number {
-		return Math.max(1, entryCapacity(this.deps.rows(), 0));
+		return visibleRows(this.deps.rows(), 0);
 	}
 
 	/** Pan the rows by `delta` columns, never left of the start; the render clamps the far end to the widest row. */
