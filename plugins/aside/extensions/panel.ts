@@ -22,14 +22,16 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { clamp } from "../../shared/clamp.ts";
 import { copyToClipboard } from "../../shared/clipboard.ts";
+import { editorTheme } from "../../shared/editor-theme.ts";
 import type { PromptDisposition } from "../../shared/rpc.ts";
 import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
+import { Viewport } from "../../shared/viewport.ts";
 
 export { selectedText } from "../../shared/selection.ts";
 
 export const TOGGLE_KEY = "alt+/";
-export const WHEEL_LINES = 3;
 /** Share of the terminal's rows the panel takes. The overlay clips lines past this, so the panel sizes its body to fit and keeps the editor on screen. */
 const HEIGHT_RATIO = 0.7;
 /** Share of the terminal's columns the panel takes: 4/9, a little under half so main stays readable beside it. */
@@ -101,16 +103,6 @@ type Item =
 
 type State = "starting" | "ready" | "failed" | "stopped";
 
-function clamp(value: number, low: number, high: number): number {
-	return Math.max(low, Math.min(value, high));
-}
-
-/** Scroll offset clamped to the body, or pinned to the end. */
-export function viewportTop(bodyHeight: number, viewportHeight: number, top: number, pinned: boolean): number {
-	const max = Math.max(0, bodyHeight - viewportHeight);
-	return pinned ? max : Math.min(Math.max(0, top), max);
-}
-
 function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
@@ -158,8 +150,7 @@ export class AsidePanel implements Component, Focusable {
 	private seeded = false;
 	private streaming = false;
 	private chain: Promise<void> = Promise.resolve();
-	private top = 0;
-	private pinned = true;
+	private readonly viewport = new Viewport();
 	private bodyRows = 10;
 	private readonly selection = new TextSelection();
 	private copiedUntil = 0;
@@ -169,17 +160,7 @@ export class AsidePanel implements Component, Focusable {
 
 	constructor(options: PanelOptions) {
 		this.o = options;
-		const theme = options.theme;
-		this.editor = new Editor(options.tui, {
-			borderColor: (s) => theme.fg("accent", s),
-			selectList: {
-				selectedPrefix: (t) => theme.fg("accent", t),
-				selectedText: (t) => theme.fg("accent", t),
-				description: (t) => theme.fg("muted", t),
-				scrollInfo: (t) => theme.fg("dim", t),
-				noMatch: (t) => theme.fg("warning", t),
-			},
-		});
+		this.editor = new Editor(options.tui, editorTheme(options.theme));
 		this.unsubscribe = options.backend.subscribe({
 			event: (ev) => this.onEvent(ev),
 			exit: (reason) => this.onExit(reason),
@@ -207,7 +188,7 @@ export class AsidePanel implements Component, Focusable {
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event.type === "wheel") {
-			this.scrollBy(Math.sign(event.wheelDelta ?? 0) * WHEEL_LINES);
+			this.viewport.wheel(event.wheelDelta ?? 0);
 			return { handled: true, render: true };
 		}
 		if (this.selection.dragging) {
@@ -260,12 +241,11 @@ export class AsidePanel implements Component, Focusable {
 		this.bodyRows = Math.max(total - FRAME_ROWS - editorLines.length, MIN_BODY_ROWS);
 
 		const lines = this.transcriptLines(inner);
-		this.top = viewportTop(lines.length, this.bodyRows, this.top, this.pinned);
-		this.pinned = this.top >= lines.length - this.bodyRows;
-		this.painted = { lines: lines.map(stripTerminalSequences), top: this.top, width: inner };
+		const top = this.viewport.layout(lines.length, this.bodyRows);
+		this.painted = { lines: lines.map(stripTerminalSequences), top, width: inner };
 		const body = lines
-			.slice(this.top, this.top + this.bodyRows)
-			.map((l, i) => highlightSelection(sliceByColumn(l, 0, inner), this.top + i, inner, this.selection.current, (s) => theme.inverse(s)));
+			.slice(top, top + this.bodyRows)
+			.map((l, i) => highlightSelection(sliceByColumn(l, 0, inner), top + i, inner, this.selection.current, (s) => theme.inverse(s)));
 		while (body.length < this.bodyRows) body.push("");
 
 		const status =
@@ -335,20 +315,9 @@ export class AsidePanel implements Component, Focusable {
 
 	/** Scroll for a navigation key. Returns false when the key is not one, so it reaches the editor. Up, Down, Home, and End scroll only while the editor is empty, so they still move the cursor in a typed question. */
 	private scrollKey(data: string): boolean {
-		const empty = this.editor.getExpandedText().length === 0;
-		if (matchesKey(data, "pageUp")) this.scrollBy(-this.bodyRows);
-		else if (matchesKey(data, "pageDown")) this.scrollBy(this.bodyRows);
-		else if (empty && matchesKey(data, "up")) this.scrollBy(-1);
-		else if (empty && matchesKey(data, "down")) this.scrollBy(1);
-		else if (empty && matchesKey(data, "home")) this.scrollBy(-this.top);
-		else if (empty && matchesKey(data, "end")) this.pinned = true;
-		else return false;
-		return true;
-	}
-
-	private scrollBy(lines: number): void {
-		this.top += lines;
-		this.pinned = false;
+		const page = matchesKey(data, "pageUp") || matchesKey(data, "pageDown");
+		if (!page && this.editor.getExpandedText().length > 0) return false;
+		return this.viewport.handleKey(data, this.bodyRows);
 	}
 
 	private submit(): void {
@@ -357,7 +326,7 @@ export class AsidePanel implements Component, Focusable {
 		this.editor.setText("");
 		const item: Item = { kind: "user", text };
 		this.items.push(item);
-		this.pinned = true;
+		this.viewport.toEnd();
 		this.chain = this.chain.then(() => this.deliver(item, text));
 	}
 

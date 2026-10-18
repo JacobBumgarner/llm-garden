@@ -8,7 +8,7 @@
  * selects it and opens its actions panel, and a drag selects text and copies
  * it to the clipboard, as in the aside panel. The list pans sideways
  * with ←/→ (or shift+wheel) to read long labels, `0` pans back,
- * PgUp/PgDn, Home/End, g/G, and the wheel move the selection. The stop-all paths:
+ * PgUp/PgDn, Home/End, and the wheel move the selection. The stop-all paths:
  * `/subagents stop`, the overlay `s` key, and a double Esc, which arrives as
  * the `subagent:stop-all` event. The `alt+a` shortcut and bare `/subagents`
  * toggle the overlay, the `subagent:open` event only opens it, and a click
@@ -29,6 +29,7 @@ import {
 	type TuiMouseEventResult,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { clamp } from "../../shared/clamp.ts";
 import { copyToClipboard } from "../../shared/clipboard.ts";
 import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
 import type { AskQuestion } from "../../ask/api.ts";
@@ -187,10 +188,6 @@ export interface RunListDeps {
 
 type RunAction = (run: Run) => Promise<void>;
 
-function clampNumber(value: number, low: number, high: number): number {
-	return Math.max(low, Math.min(value, high));
-}
-
 /**
  * Overlay component listing the running runs, then the finished runs, each
  * newest first, with a dim header titling each group and a dim `(none)` line
@@ -201,7 +198,7 @@ function clampNumber(value: number, low: number, high: number): number {
  * confirm, `m` steers it, `a` answers a paused run, esc closes. Runs that do not fit the overlay's height scroll
  * with the selection, and dim `↑ N more` and `↓ N more` lines count the
  * entries hidden on each side. PgUp/PgDn move the selection by a page,
- * Home/End (g/G) to the first and last run, and the wheel by one run a tick.
+ * Home/End to the first and last run, and the wheel by one run a tick.
  * Rows wider than the overlay pan sideways with ←/→ or shift+wheel, by
  * `PAN_STEP` columns, up to the widest row's end; `0` pans back. The help
  * line reports the pan while one is in effect. Mouse rows arrive relative to
@@ -334,8 +331,8 @@ export class RunListView {
 		if (matchesKey(data, "down")) return this.move(1);
 		if (matchesKey(data, "pageUp")) return this.moveTo(this.selected - this.pageSize());
 		if (matchesKey(data, "pageDown")) return this.moveTo(this.selected + this.pageSize());
-		if (matchesKey(data, "home") || data === "g") return this.moveTo(0);
-		if (matchesKey(data, "end") || data === "G") return this.moveTo(Number.POSITIVE_INFINITY);
+		if (matchesKey(data, "home")) return this.moveTo(0);
+		if (matchesKey(data, "end")) return this.moveTo(Number.POSITIVE_INFINITY);
 		if (matchesKey(data, "left")) return this.panBy(-PAN_STEP);
 		if (matchesKey(data, "right")) return this.panBy(PAN_STEP);
 		if (data === "0") return this.panBy(Number.NEGATIVE_INFINITY);
@@ -394,7 +391,7 @@ export class RunListView {
 		const line = y - BOX_TOP;
 		const inside = col >= 0 && col < width && line >= 0 && line < lines.length;
 		if (!clampEdges && !inside) return undefined;
-		return { line: clampNumber(line, 0, lines.length - 1), col: clampNumber(col, 0, width - 1) };
+		return { line: clamp(line, 0, lines.length - 1), col: clamp(col, 0, width - 1) };
 	}
 
 	/** The last row: `copied` for a moment after a drag copies text, else the key line with the pan in front while one is in effect. */

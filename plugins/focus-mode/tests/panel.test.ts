@@ -10,7 +10,6 @@ import {
 	type PanelStyle,
 	panelRows,
 	selectedText,
-	viewportTop,
 	wrapRow,
 } from "../extensions/panel.ts";
 
@@ -137,15 +136,6 @@ describe("bodyLines", () => {
 	});
 });
 
-describe("viewportTop", () => {
-	it("pins to the end and clamps manual offsets", () => {
-		assert.equal(viewportTop(50, 10, 0, true), 40);
-		assert.equal(viewportTop(50, 10, 45, false), 40);
-		assert.equal(viewportTop(50, 10, -3, false), 0);
-		assert.equal(viewportTop(5, 10, 3, false), 0);
-	});
-});
-
 describe("selectedText", () => {
 	it("takes the first line from the start column and the last through the end column", () => {
 		const lines = ["abcdef", "ghijkl", "mnopqr"];
@@ -202,6 +192,18 @@ describe("ActionsPanel", () => {
 		assert.ok(component.render(30)[1]!.includes("read f3"));
 		component.handleInput("end");
 		assert.ok(component.render(30)[1]!.includes("read f4"));
+		component.dispose();
+	});
+
+	it("ignores g and G", () => {
+		const entries = Array.from({ length: 6 }, (_, i) => entry({ id: `${i}`, name: "read", args: { path: `f${i}` } }));
+		const { component } = panel(entries, 6);
+		component.render(30);
+		component.handleInput("up");
+		component.handleInput("g");
+		assert.ok(component.render(30)[1]!.includes("read f3"), "g does not jump to the top");
+		component.handleInput("G");
+		assert.ok(component.render(30)[1]!.includes("read f3"), "G does not jump to the end");
 		component.dispose();
 	});
 

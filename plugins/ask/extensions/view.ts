@@ -8,7 +8,6 @@ import {
 	type Color,
 	type Component,
 	Editor,
-	type EditorTheme,
 	type Focusable,
 	Markdown,
 	type KeyId,
@@ -23,7 +22,9 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { clamp } from "../../shared/clamp.ts";
 import { copyToClipboard } from "../../shared/clipboard.ts";
+import { editorTheme } from "../../shared/editor-theme.ts";
 import { CHORDS, isPrintable, type KeyName, NAV_KEYS, unwrapPaste } from "./keys.ts";
 import {
 	columnRows,
@@ -155,10 +156,6 @@ function selectedText(pane: Pane, selection: Selection): string {
 	return lines.join("\n");
 }
 
-function clamp(value: number, low: number, high: number): number {
-	return Math.max(low, Math.min(value, high));
-}
-
 const MARK_GLYPHS: Record<Mark, string> = {
 	unanswered: "○",
 	answered: "✓",
@@ -216,19 +213,6 @@ function editorTabKey(data: string): "tab" | "shift+tab" | null {
 	if (matchesKey(data, NAV_KEYS["shift+tab"] as KeyId)) return "shift+tab";
 	if (matchesKey(data, NAV_KEYS.tab as KeyId)) return "tab";
 	return null;
-}
-
-function editorTheme(theme: Theme): EditorTheme {
-	return {
-		borderColor: (s) => theme.fg("accent", s),
-		selectList: {
-			selectedPrefix: (t) => theme.fg("accent", t),
-			selectedText: (t) => theme.fg("accent", t),
-			description: (t) => theme.fg("muted", t),
-			scrollInfo: (t) => theme.fg("dim", t),
-			noMatch: (t) => theme.fg("warning", t),
-		},
-	};
 }
 
 function draftEvent(which: FormState["mode"], text: string): FormEvent {

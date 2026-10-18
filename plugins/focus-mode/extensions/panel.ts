@@ -11,7 +11,7 @@
  * turn, a dashed rule separates steps: the runs of calls the agent made between pieces of text.
  * Opened with a target step or turn, the panel scrolls so that step or turn's first line is at the
  * top instead of following the end. Esc, q, space, or the opening shortcut closes it; ↑/↓,
- * PgUp/PgDn, Home, End, g, G, and the wheel scroll. A drag over the body selects text, copies it to
+ * PgUp/PgDn, Home, End, and the wheel scroll. A drag over the body selects text, copies it to
  * the clipboard on release, and leaves it highlighted until the next press or key; a double click
  * copies the whole line. A status row above the bottom rule carries the key hint, and reads
  * "copied" for a moment after a copy. A timer redraws the panel each second so running durations
@@ -30,8 +30,10 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { clamp } from "../../shared/clamp.ts";
 import { copyToClipboard } from "../../shared/clipboard.ts";
 import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
+import { Viewport } from "../../shared/viewport.ts";
 import type { ActionEntry } from "./log.ts";
 import { durationLabel, stripColor } from "./strip.ts";
 import { summarize } from "./summarize.ts";
@@ -55,7 +57,6 @@ const COPIED_MS = 1500;
 const MAX_ENTRIES = 500;
 /** Columns of frame around the body: a border and a space on each side. */
 const FRAME_X = 2;
-const WHEEL_LINES = 3;
 /** Below this many columns of text after the prefix, a line is clipped rather than wrapped. */
 const WRAP_MIN = 10;
 /** Blank rows kept below the last body line so it does not sit on the status row. */
@@ -94,10 +95,6 @@ function elapsedMs(entry: ActionEntry, now: number): number | undefined {
 	if (entry.durationMs !== undefined) return entry.durationMs;
 	if (entry.startedAt === undefined) return undefined;
 	return now - entry.startedAt;
-}
-
-function clamp(value: number, low: number, high: number): number {
-	return Math.max(low, Math.min(value, high));
 }
 
 /**
@@ -210,12 +207,6 @@ export function bodyLines(...args: Parameters<typeof bodyLayout>): string[] {
 	return bodyLayout(...args).lines;
 }
 
-/** Scroll offset clamped so the viewport never runs past the body, or pinned to the end. */
-export function viewportTop(bodyHeight: number, viewportHeight: number, top: number, pinned: boolean): number {
-	const max = Math.max(0, bodyHeight - viewportHeight);
-	return pinned ? max : Math.min(Math.max(0, top), max);
-}
-
 export class ActionsPanel implements Component {
 	private entries: () => ActionEntry[];
 	private groups: () => number[];
@@ -226,8 +217,7 @@ export class ActionsPanel implements Component {
 	private theme: Theme;
 	private terminal: PanelTerminal;
 	private done: () => void;
-	private top = 0;
-	private pinned = true;
+	private readonly viewport = new Viewport();
 	/** Where to scroll on the next paint, cleared once applied. */
 	private target: PanelTarget | undefined;
 	private timer: ReturnType<typeof setInterval> | undefined;
@@ -282,26 +272,15 @@ export class ActionsPanel implements Component {
 		this.selection.clear();
 		if (matchesKey(data, "escape") || data === "q" || matchesKey(data, "space") || matchesKey(data, "alt+t")) {
 			this.done();
-		} else if (matchesKey(data, "up")) {
-			this.scrollBy(-1);
-		} else if (matchesKey(data, "down")) {
-			this.scrollBy(1);
-		} else if (matchesKey(data, "pageUp")) {
-			this.scrollBy(-height);
-		} else if (matchesKey(data, "pageDown")) {
-			this.scrollBy(height);
-		} else if (matchesKey(data, "home") || data === "g") {
-			this.top = 0;
-			this.pinned = false;
-		} else if (matchesKey(data, "end") || data === "G") {
-			this.pinned = true;
+		} else {
+			this.viewport.handleKey(data, height);
 		}
 		this.requestRender();
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event.type === "wheel") {
-			this.scrollBy(Math.sign(event.wheelDelta ?? 0) * WHEEL_LINES);
+			this.viewport.wheel(event.wheelDelta ?? 0);
 			return { handled: true, render: true };
 		}
 		if (this.selection.dragging) {
@@ -336,17 +315,16 @@ export class ActionsPanel implements Component {
 		if (this.target) {
 			const line = "step" in this.target ? layout.stepAt.get(this.target.step) : layout.groupAt.get(this.target.group);
 			if (line !== undefined) {
-				this.top = line;
-				this.pinned = false;
+				this.viewport.top = line;
+				this.viewport.pinned = false;
 			}
 			this.target = undefined;
 		}
-		this.top = viewportTop(body.length, height, this.top, this.pinned);
-		this.pinned = this.top >= body.length - height;
-		this.painted = { lines: body.map(stripTerminalSequences), top: this.top, height, width: content };
+		const top = this.viewport.layout(body.length, height);
+		this.painted = { lines: body.map(stripTerminalSequences), top, height, width: content };
 		const view: string[] = [];
 		for (let row = 0; row < height; row++) {
-			const line = this.top + row;
+			const line = top + row;
 			view.push(highlightSelection(sliceByColumn(body[line] ?? "", 0, content), line, content, this.selection.current, (t) => th.inverse(t)));
 		}
 
@@ -372,11 +350,6 @@ export class ActionsPanel implements Component {
 	/** Rows left for entries inside the top rule, the status row, and the bottom rule. */
 	private viewportHeight(): number {
 		return Math.max(1, panelRows(this.rows()) - 3);
-	}
-
-	private scrollBy(lines: number): void {
-		this.top += lines;
-		this.pinned = false;
 	}
 
 	/** Map a component-local point to the body cell under it; with `clampEdges` a point outside snaps to the nearest cell. */

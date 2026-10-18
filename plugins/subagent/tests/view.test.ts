@@ -639,10 +639,12 @@ test("page, home, and end keys move the selection by a page and to the ends with
 	assert.equal(selectedId(), "r0");
 	await press("pageUp");
 	assert.equal(selectedId(), "r0", "home does not wrap");
-	await press("G");
-	assert.equal(selectedId(), "r11");
+	await press("end");
 	await press("g");
-	assert.equal(selectedId(), "r0");
+	assert.equal(selectedId(), "r11", "g does not move the selection");
+	await press("home");
+	await press("G");
+	assert.equal(selectedId(), "r0", "G does not move the selection");
 });
 
 test("left and right pan the rows up to the widest row's end, 0 pans back, and the key line reports the pan", async () => {

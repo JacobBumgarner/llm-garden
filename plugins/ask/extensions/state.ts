@@ -1,5 +1,6 @@
 /** Pure form state: a key or draft event in, the next state out. */
 
+import { clamp } from "../../shared/clamp.ts";
 import type { Answer, AskQuestion, AskResult, FormEvent, FormState, KeyName } from "./types.ts";
 
 function optionCount(question: AskQuestion): number {
@@ -54,10 +55,6 @@ export function isBatch(state: FormState): boolean {
 /** Report whether the form is on its review step. */
 export function inReview(state: FormState): boolean {
 	return state.current === state.questions.length;
-}
-
-function clamp(value: number, max: number): number {
-	return Math.max(0, Math.min(value, max));
 }
 
 function cycle(value: number, delta: number, size: number): number {
@@ -170,7 +167,7 @@ function currentQuestion(state: FormState): AskQuestion {
 
 function moveCursor(state: FormState, delta: number): FormState {
 	const max = inReview(state) ? state.questions.length : lastListRow(state);
-	return { ...state, cursor: clamp(state.cursor + delta, max) };
+	return { ...state, cursor: clamp(state.cursor + delta, 0, max) };
 }
 
 /** Move to the neighbouring tab, the review step included in the cycle. */
