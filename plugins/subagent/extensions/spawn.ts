@@ -1,6 +1,6 @@
 /** The protocol text appended to every subagent's system prompt. */
 
-import { PAUSE_MARKER } from "../../ask/extensions/pause.ts";
+import { PAUSE_MARKER } from "../../ask/api.ts";
 
 export const SUBAGENT_PROTOCOL = [
 	"## Working as a subagent",

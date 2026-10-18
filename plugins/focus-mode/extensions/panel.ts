@@ -30,7 +30,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { copyToClipboard } from "../../ask/extensions/clipboard.ts";
+import { copyToClipboard } from "../../shared/clipboard.ts";
 import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
 import type { ActionEntry } from "./log.ts";
 import { durationLabel, stripColor } from "./strip.ts";

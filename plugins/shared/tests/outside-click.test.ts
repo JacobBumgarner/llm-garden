@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isOutside, outsideClickListener, parsePresses } from "../extensions/outside-click.ts";
+import { isOutside, outsideClickListener, parsePresses } from "../outside-click.ts";
 
 const press = (x: number, y: number, button = 0) => `\x1b[<${button};${x + 1};${y + 1}M`;
 const bounds = { row: 1, col: 50, width: 40, height: 20 };

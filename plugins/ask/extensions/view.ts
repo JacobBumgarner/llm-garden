@@ -23,7 +23,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { copyToClipboard } from "./clipboard.ts";
+import { copyToClipboard } from "../../shared/clipboard.ts";
 import { CHORDS, isPrintable, type KeyName, NAV_KEYS, unwrapPaste } from "./keys.ts";
 import {
 	columnRows,

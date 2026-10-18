@@ -9,7 +9,7 @@
 
 import * as os from "node:os";
 import type { Message } from "@earendil-works/pi-ai";
-import { formatQuestionsForOrchestrator } from "../../ask/extensions/pause.ts";
+import { formatQuestionsForOrchestrator } from "../../ask/api.ts";
 import type { DetachReason } from "./blocked.ts";
 import { getFinalOutput } from "./pause.ts";
 import type { DisplayItem, PausedRun, Run, RunSnapshot, SingleResult, UsageStats } from "./types.ts";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { type TestContext, test } from "node:test";
 import type { Message } from "@earendil-works/pi-ai";
-import { PAUSE_NOTICE } from "../../ask/extensions/pause.ts";
+import { PAUSE_NOTICE } from "../../ask/api.ts";
 import {
 	COALESCE_MS,
 	type CourierRegistry,

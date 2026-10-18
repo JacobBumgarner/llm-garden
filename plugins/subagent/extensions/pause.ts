@@ -5,9 +5,7 @@
  */
 
 import type { Message } from "@earendil-works/pi-ai";
-import { normalize } from "../../ask/extensions/call.ts";
-import { isPauseText } from "../../ask/extensions/pause.ts";
-import type { AskQuestion } from "../../ask/extensions/types.ts";
+import { isPauseText, normalize, type AskQuestion } from "../../ask/api.ts";
 
 /** The text of the last assistant message, or "" when there is none. */
 export function getFinalOutput(messages: Message[]): string {

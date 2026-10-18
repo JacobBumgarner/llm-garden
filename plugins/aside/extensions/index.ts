@@ -5,7 +5,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { AsideChild } from "./child.ts";
-import { watchOutsideClicks } from "./outside-click.ts";
+import { watchOutsideClicks } from "../../shared/outside-click.ts";
 import { modelAlias } from "../../shared/model-alias.ts";
 import { buildFeed, type FeedEntry, type Meta, nextSessionId, readMeta, asideSessionId, writeMeta } from "./feed.ts";
 import { OVERLAY_OPTIONS, type PanelBackend, type PanelEvent, type PanelListener, AsidePanel, TOGGLE_KEY } from "./panel.ts";

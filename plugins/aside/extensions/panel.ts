@@ -22,7 +22,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { copyToClipboard } from "../../ask/extensions/clipboard.ts";
+import { copyToClipboard } from "../../shared/clipboard.ts";
 import type { PromptDisposition } from "../../shared/rpc.ts";
 import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
 

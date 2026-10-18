@@ -29,11 +29,10 @@ import {
 	type TuiMouseEventResult,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { copyToClipboard } from "../../ask/extensions/clipboard.ts";
+import { copyToClipboard } from "../../shared/clipboard.ts";
 import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
-import type { AskQuestion } from "../../ask/extensions/types.ts";
-import { ActionLog } from "../../focus-mode/extensions/log.ts";
-import { ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/extensions/panel.ts";
+import type { AskQuestion } from "../../ask/api.ts";
+import { ActionLog, ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/api.ts";
 import {
 	formatOverlayRow,
 	layoutOverlay,

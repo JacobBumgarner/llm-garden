@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type TestContext, test } from "node:test";
 import type { JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { formatAnswersMessage, PAUSE_NOTICE } from "../../ask/extensions/pause.ts";
+import { formatAnswersMessage, PAUSE_NOTICE } from "../../ask/api.ts";
 import type { AgentConfig } from "../extensions/agents.ts";
 import { COALESCE_MS, createCourier } from "../extensions/courier.ts";
 import {
