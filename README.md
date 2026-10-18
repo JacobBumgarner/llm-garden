@@ -55,6 +55,22 @@ Update with `pi update --extensions`.
 | `dotfiles/cmux/cmux.json` | `~/.config/cmux/cmux.json` |
 | `dotfiles/cmux/sidebars/agents.js` | `~/.config/cmux/sidebars/agents.js` |
 | `dotfiles/pi/extensions/cmux-needs-input.ts` | `~/.pi/agent/extensions/cmux-needs-input.ts` |
+| `dotfiles/lazygit/config.yml` | `~/.config/lazygit/config.yml` |
+| `dotfiles/git/delta.gitconfig` | `~/.config/git/delta.gitconfig` |
 
-Symlink them into place with `dotfiles/link.sh`.
+### New mac
+
+```
+brew bundle --file dotfiles/Brewfile   # lazygit, delta, gh, ripgrep, tmux, tuicr, ghostty, cmux
+sh dotfiles/install.sh                 # copy configs into place, add the delta include to ~/.gitconfig
+```
+
+`install.sh` copies one way, repo to live. It refuses to overwrite a live file
+that differs from the repo copy, so merge or move the existing file first. To
+keep a live edit, copy it back into `dotfiles/` by hand before committing.
+
+`~/.gitconfig` itself isn't tracked (it holds name and email). The script adds
+an `include.path` pointing at `delta.gitconfig` instead.
+
+`pi` installs separately, see the pi section above.
 

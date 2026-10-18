@@ -1,0 +1,39 @@
+gui:
+  wrapLinesInDiffView: true
+  sidePanelWidth: 0.25
+  showBottomLine: false
+  theme:
+    activeBorderColor: ['white', 'bold']
+    inactiveBorderColor: ['#555555']
+    searchingActiveBorderColor: ['yellow', 'bold']
+    optionsTextColor: ['#888888']
+    selectedLineBgColor: ['#333333']
+    inactiveViewSelectedLineBgColor: ['#262626']
+    cherryPickedCommitFgColor: ['white']
+    cherryPickedCommitBgColor: ['#444444']
+    markedBaseCommitFgColor: ['white']
+    markedBaseCommitBgColor: ['#444444']
+    unstagedChangesColor: ['red']
+    defaultFgColor: ['default']
+    authorColors:
+      '*': '#888888'
+    branchColorPatterns:
+      '.*': '#aaaaaa'
+git:
+  diffRenderers:
+    - colorArg: always
+      command: delta --dark --paging=never --line-numbers
+customCommands:
+  - key: 'o'
+    context: 'localBranches'
+    description: 'Open pull request (write title + body in vim, then push)'
+    output: 'terminal'
+    prompts:
+      - type: 'input'
+        key: 'Base'
+        title: 'Base branch'
+        initialValue: 'main'
+        suggestions:
+          preset: 'branches'
+    command: >-
+      f=$(mktemp -t pr-XXXXXX.md) && printf 'PR title on this line\n\nBody goes here.\n' > "$f" && vim "$f" && title=$(sed -n '1p' "$f") && body=$(sed '1d' "$f" | sed '1{/^$/d;}') && [ -n "$title" ] && [ "$title" != 'PR title on this line' ] && git push -u origin {{.SelectedLocalBranch.Name | quote}} && gh pr create --head {{.SelectedLocalBranch.Name | quote}} --base {{.Form.Base | quote}} --title "$title" --body "$body" ; rm -f "$f"

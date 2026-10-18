@@ -1,0 +1,21 @@
+# Tools the dotfiles in this directory configure or depend on.
+# Install with: brew bundle --file dotfiles/Brewfile
+
+tap "manaflow-ai/cmux"
+
+# git
+brew "lazygit"
+brew "git-delta"   # lazygit's diff renderer and git's pager
+brew "gh"          # lazygit's "open pull request" command
+
+# terminal
+brew "ripgrep"
+brew "tmux"
+brew "tuicr"
+
+# undecided
+# brew "neovim"
+# brew "yazi"
+
+cask "ghostty"
+cask "cmux"
