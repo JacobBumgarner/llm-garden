@@ -1,3 +1,13 @@
 keybind = shift+enter=text:\x1b\r
 font-size = 20
 theme = dark:Argonaut, light:Firewatch
+
+# Calm cursor: non-blinking seafoam block, overriding Argonaut's red.
+cursor-style = block
+cursor-style-blink = false
+cursor-color = #dee0e1
+cursor-text = #0e1019
+
+# Selection: soft slate instead of Argonaut's white-on-teal.
+selection-background = #2a3744
+selection-foreground = #dee0e1
