@@ -1,10 +1,23 @@
 /**
  * Turn one tool item into plain display lines, one renderer per known tool and a default.
+ *
+ * Single-line surfaces (the transcript strips, the subagent overlay rows) take the default summary,
+ * where a bash command is its first line. The actions panel asks for the `full` summary, where a
+ * bash command is broken by `splitShell` into one segment per line, continuation lines indented to
+ * sit under the command text.
  */
 
+import { splitShell } from "./shell.ts";
 import type { ToolItem } from "./types.ts";
 
 const RUNNING = "…";
+/** Indent for a bash continuation line: the width of the `$ ` prompt, plus the running mark when drawn. */
+const PROMPT = "$ ";
+
+export interface SummarizeOptions {
+	/** Show every line of a multi-line or chained bash command instead of its first line. */
+	full?: boolean;
+}
 
 const KEY_ARGS: Record<string, string> = {
 	read: "path",
@@ -147,8 +160,18 @@ function mark(line: string, running: boolean): string {
 	return running ? `${RUNNING} ${line}` : line;
 }
 
-/** Summarize a tool item as plain strings: one line for most tools, one per question for ask. */
-export function summarize(item: ToolItem): string[] {
+/** The `$ command` line(s): the first line alone, or every `splitShell` segment with an error marker on the first. */
+function summarizeBash(item: ToolItem, running: boolean, full: boolean): string[] {
+	const command = str(item.args.command) ?? "";
+	const segments = full ? splitShell(command) : [command.split("\n")[0]!];
+	const head = `${PROMPT}${segments[0]}`;
+	const first = mark(item.result?.isError ? `${head} error` : head, running);
+	const indent = " ".repeat(PROMPT.length + (running ? RUNNING.length + 1 : 0));
+	return [first, ...segments.slice(1).map((segment) => indent + segment)];
+}
+
+/** Summarize a tool item as plain strings: one line for most tools, one per question for ask, one per segment for a full bash. */
+export function summarize(item: ToolItem, options: SummarizeOptions = {}): string[] {
 	const running = item.result === undefined || item.result.partial === true;
 	const args = item.args;
 	switch (item.name) {
@@ -162,11 +185,8 @@ export function summarize(item: ToolItem): string[] {
 			const content = str(args.content) ?? "";
 			return [mark(`write ${str(args.path) ?? ""} (${lineCount(content)} lines)`, running)];
 		}
-		case "bash": {
-			const command = (str(args.command) ?? "").split("\n")[0];
-			const base = `$ ${command}`;
-			return [mark(item.result?.isError ? `${base} error` : base, running)];
-		}
+		case "bash":
+			return summarizeBash(item, running, options.full === true);
 		case "read":
 		case "ls":
 		case "grep":

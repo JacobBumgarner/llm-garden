@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActionEntry } from "../extensions/log.ts";
-import { ActionsPanel, bodyLayout, bodyLines, entryLines, groupHeader, type PanelStyle, panelRows, selectedText, viewportTop } from "../extensions/panel.ts";
+import {
+	ActionsPanel,
+	bodyLayout,
+	bodyLines,
+	entryLines,
+	groupHeader,
+	type PanelStyle,
+	panelRows,
+	selectedText,
+	viewportTop,
+	wrapRow,
+} from "../extensions/panel.ts";
 
 /** Plain styling so assertions can read the text. */
 const style: PanelStyle = {
@@ -33,7 +44,7 @@ describe("entryLines", () => {
 		assert.deepEqual(entryLines(done, style), ["● read f.ts · 2s", "  │ x", "  │ y"]);
 	});
 
-	it("draws long summaries at full length with the error marker after them", () => {
+	it("draws long summaries at full length without a width, the error marker after them", () => {
 		const failed = entry({
 			id: "a",
 			name: "bash",
@@ -46,6 +57,50 @@ describe("entryLines", () => {
 	it("indents nested calls", () => {
 		const nested = entry({ id: "a/1", name: "read", args: { path: "f" }, parentId: "a" });
 		assert.deepEqual(entryLines(nested, style), ["  ○ … read f"]);
+	});
+
+	it("breaks a chained bash command one step per line, continuation under the command", () => {
+		const done = entry({
+			id: "a",
+			name: "bash",
+			args: { command: "cd x && make | tee log" },
+			result: { text: "", details: undefined, isError: true },
+			durationMs: 3000,
+			tail: ["ok"],
+		});
+		assert.deepEqual(entryLines(done, style), ["● $ cd x error · 3s", "    && make", "    | tee log", "  │ ok"]);
+	});
+
+	// The pi-tui stub wraps per character, so these use unbroken tokens where word and character wrapping agree.
+	it("wraps summary and tail rows to the width with a hanging indent", () => {
+		const done = entry({
+			id: "a",
+			name: "read",
+			args: { path: "/" + "p".repeat(30) },
+			result: { text: "", details: undefined, isError: false },
+			tail: ["t".repeat(20)],
+		});
+		assert.deepEqual(entryLines(done, style, 0, 20), [
+			"● read /" + "p".repeat(12),
+			"  " + "p".repeat(18),
+			"  │ " + "t".repeat(16),
+			"    " + "t".repeat(4),
+		]);
+	});
+});
+
+describe("wrapRow", () => {
+	it("returns one row when the text fits or no width is given", () => {
+		assert.deepEqual(wrapRow("> ", "short", 10), ["> short"]);
+		assert.deepEqual(wrapRow("> ", "x".repeat(30), undefined), ["> " + "x".repeat(30)]);
+	});
+
+	it("hangs later rows under the text, not the prefix", () => {
+		assert.deepEqual(wrapRow("● ", "a".repeat(25), 12), ["● " + "a".repeat(10), "  " + "a".repeat(10), "  " + "a".repeat(5)]);
+	});
+
+	it("clips instead of wrapping when the prefix leaves under ten columns", () => {
+		assert.deepEqual(wrapRow(" ".repeat(8), "aaaa bbbb cccc", 16), [" ".repeat(8) + "aaaa bbbb cccc"]);
 	});
 });
 
@@ -131,16 +186,17 @@ describe("ActionsPanel", () => {
 		assert.equal(lines.length, 6);
 		assert.ok(lines[0]!.startsWith("╭"));
 		assert.ok(lines.at(-1)!.startsWith("╰"));
-		assert.ok(lines[1]!.includes("read f3"), lines[1]);
-		assert.ok(lines[3]!.includes("read f5"), lines[3]);
-		assert.equal(lines[4]!.trim(), "│                            │".trim(), lines[4]);
-		assert.ok(lines.at(-1)!.includes("↑↓ scroll"), lines.at(-1));
+		assert.ok(lines[1]!.includes("read f4"), lines[1]);
+		assert.ok(lines[2]!.includes("read f5"), lines[2]);
+		assert.equal(lines[3]!.trim(), "│                            │".trim(), lines[3]);
+		assert.ok(lines[4]!.includes("↑↓ scroll"), lines[4]);
+		assert.match(lines.at(-1)!, /^╰─+╯$/, lines.at(-1));
 		for (const line of lines) assert.equal([...line].length, 30, line);
 	});
 
 	it("scrolls up and stops following, then End pins again", () => {
 		const entries = Array.from({ length: 6 }, (_, i) => entry({ id: `${i}`, name: "read", args: { path: `f${i}` } }));
-		const { component } = panel(entries, 5);
+		const { component } = panel(entries, 6);
 		component.render(30);
 		component.handleInput("up");
 		assert.ok(component.render(30)[1]!.includes("read f3"));
@@ -149,25 +205,22 @@ describe("ActionsPanel", () => {
 		component.dispose();
 	});
 
-	it("pans sideways with the arrows, clamped to the widest line, and 0 resets", () => {
+	it("wraps a long command across rows instead of clipping it", () => {
 		const entries = [entry({ id: "a", name: "bash", args: { command: "echo " + "x".repeat(60) } })];
-		const { component } = panel(entries, 5);
-		component.render(30);
-		component.handleInput("right");
-		let lines = component.render(40);
-		assert.ok(lines[2]!.startsWith("│ ho " + "x".repeat(8)), lines[2]);
-		assert.ok(lines.at(-1)!.includes("→ 8"), lines.at(-1));
-		for (let i = 0; i < 20; i++) component.handleInput("right");
-		lines = component.render(30);
-		assert.ok(lines[2]!.includes("x".repeat(20)), lines[2]);
-		component.handleInput("0");
-		assert.ok(component.render(30)[2]!.includes("$ echo"), component.render(30)[2]);
+		const { component } = panel(entries, 8);
+		const lines = component.render(40);
 		component.dispose();
+		assert.ok(lines[2]!.includes("$ echo"), lines[2]);
+		assert.ok(lines[3]!.startsWith("│   x"), lines[3]);
+		assert.ok(lines[4]!.startsWith("│   x"), lines[4]);
+		const shown = lines.slice(2, 5).join("").match(/x/g)!.length;
+		assert.equal(shown, 60);
+		for (const line of lines) assert.equal([...line].length, 40, line);
 	});
 
 	it("selects by drag inside the body, highlights it, and copies on release", () => {
 		const entries = [entry({ id: "a", name: "read", args: { path: "first" } }), entry({ id: "b", name: "read", args: { path: "second" } })];
-		const { component, written } = panel(entries, 6);
+		const { component, written } = panel(entries, 7);
 		component.render(40);
 		assert.deepEqual(component.handleMouse(mouse("press", 2, 2)), { capture: true, handled: true, render: true });
 		component.handleMouse(mouse("drag", 9, 3));
@@ -192,19 +245,14 @@ describe("ActionsPanel", () => {
 		assert.equal(Buffer.from(payload, "base64").toString("utf8"), "○ … read f.ts");
 	});
 
-	it("pans with shift+wheel and scrolls with a plain wheel", () => {
-		const entries = Array.from({ length: 6 }, (_, i) => entry({ id: `${i}`, name: "bash", args: { command: "echo " + "x".repeat(60) } }));
-		const { component } = panel(entries, 5);
+	it("scrolls with the wheel", () => {
+		const entries = Array.from({ length: 6 }, (_, i) => entry({ id: `${i}`, name: "read", args: { path: `f${i}` } }));
+		const { component } = panel(entries, 6);
 		component.render(40);
-		component.handleMouse(mouse("wheel", 5, 2, { wheelDelta: -1, shift: true }));
-		let lines = component.render(40);
-		assert.ok(lines.at(-1)!.includes("→ 8"), lines.at(-1));
-		component.handleMouse(mouse("wheel", 5, 2, { wheelDelta: 1, shift: true }));
 		component.handleMouse(mouse("wheel", 5, 2, { wheelDelta: -1 }));
-		lines = component.render(40);
-		assert.ok(!lines.at(-1)!.includes("→ 8"), lines.at(-1));
-		assert.ok(lines[1]!.includes("$ echo"), lines[1]);
+		const lines = component.render(40);
 		component.dispose();
+		assert.ok(lines[1]!.includes("read f1"), lines[1]);
 	});
 
 	it("takes its share of the terminal height, floored", () => {

@@ -2,19 +2,20 @@
  * The actions panel: a centered modal overlay that lists the action log, newest at the bottom, and
  * follows new entries while the view is at the end.
  *
- * Each entry is its strip summary behind a status glyph, a duration once finished, and the capped
- * tail of its output in muted text. Nested calls are indented under their parent; every turn opens
+ * Each entry is its full summary behind a status glyph, a duration once finished, and the capped
+ * tail of its output in muted text. A bash command is broken one pipeline step per line by
+ * `splitShell`, and every line wider than the panel soft-wraps with a hanging indent, so nothing
+ * needs sideways scrolling. Nested calls are indented under their parent; every turn opens
  * with a header line carrying the first line of the user message that started it, painted in the
  * transcript's user-message colors, and a turn without calls says so under its header. Within a
  * turn, a dashed rule separates steps: the runs of calls the agent made between pieces of text.
  * Opened with a target step or turn, the panel scrolls so that step or turn's first line is at the
- * top instead of following the end. Lines are drawn at full length: ←/→ and shift+wheel pan the
- * view sideways (wheel-up pans right), `0` pans back to the left edge. Esc, q, space, or the opening
- * shortcut closes it; ↑/↓, PgUp/PgDn, Home, End, g, G, and the wheel scroll. A drag over the body selects text, copies it to
+ * top instead of following the end. Esc, q, space, or the opening shortcut closes it; ↑/↓,
+ * PgUp/PgDn, Home, End, g, G, and the wheel scroll. A drag over the body selects text, copies it to
  * the clipboard on release, and leaves it highlighted until the next press or key; a double click
- * copies the whole line. The frame reports "copied" for a moment. A timer redraws the panel each
- * second so running durations tick. Pi forwards only vertical wheel events, so a horizontal trackpad
- * swipe cannot pan.
+ * copies the whole line. A status row above the bottom rule carries the key hint, and reads
+ * "copied" for a moment after a copy. A timer redraws the panel each second so running durations
+ * tick.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -27,11 +28,15 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { copyToClipboard } from "../../ask/extensions/clipboard.ts";
+import { type Cell, highlightSelection, TextSelection } from "../../shared/selection.ts";
 import type { ActionEntry } from "./log.ts";
 import { durationLabel, stripColor } from "./strip.ts";
 import { summarize } from "./summarize.ts";
+
+export { selectedText } from "../../shared/selection.ts";
 
 const DONE = "● ";
 const RUNNING = "○ ";
@@ -44,16 +49,16 @@ const STEP_RULE = "┈┈┈┈┈┈┈┈";
 /** Columns before a group label, matching the transcript's user message padding. */
 const HEADER_PAD = " ";
 const TICK_MS = 1000;
-/** How long the frame reads "copied" after a copy. */
+/** How long the status row reads "copied" after a copy. */
 const COPIED_MS = 1500;
 /** Entries beyond this many are dropped from the top of the view. */
 const MAX_ENTRIES = 500;
 /** Columns of frame around the body: a border and a space on each side. */
 const FRAME_X = 2;
 const WHEEL_LINES = 3;
-/** Columns one ←/→ press pans. */
-const PAN_STEP = 8;
-/** Blank rows kept below the last body line so it does not sit on the bottom rule. */
+/** Below this many columns of text after the prefix, a line is clipped rather than wrapped. */
+const WRAP_MIN = 10;
+/** Blank rows kept below the last body line so it does not sit on the status row. */
 const BODY_PAD_BOTTOM = 1;
 /** The panel's share of the terminal, and its floor. */
 export const PANEL_WIDTH = "70%";
@@ -74,19 +79,6 @@ export interface PanelTerminal {
 	write(data: string): void;
 }
 
-/** A body position: line index into the full body, character column into that line. */
-interface Cell {
-	line: number;
-	col: number;
-}
-
-/** A drag from the pressed cell to the one under the pointer; `settled` once released and copied. */
-interface Selection {
-	anchor: Cell;
-	focus: Cell;
-	settled: boolean;
-}
-
 /** Where the panel scrolls on open: a step's or a turn's first body line. */
 export type PanelTarget = { step: number } | { group: number };
 
@@ -104,29 +96,35 @@ function elapsedMs(entry: ActionEntry, now: number): number | undefined {
 	return now - entry.startedAt;
 }
 
-function before(a: Cell, b: Cell): boolean {
-	return a.line < b.line || (a.line === b.line && a.col < b.col);
-}
-
-/** The selection's cells in reading order. */
-function ordered(selection: Selection): [Cell, Cell] {
-	return before(selection.focus, selection.anchor) ? [selection.focus, selection.anchor] : [selection.anchor, selection.focus];
-}
-
 function clamp(value: number, low: number, high: number): number {
 	return Math.max(low, Math.min(value, high));
 }
 
-/** Styled lines for one entry at full length: summary lines, then the tail. */
-export function entryLines(entry: ActionEntry, style: PanelStyle, now = Date.now()): string[] {
+/**
+ * `prefix + text`, wrapped so no row exceeds `width`: the first row carries the prefix, later rows
+ * blank space of the same width (a hanging indent). Without a width, or when the prefix leaves too
+ * little room, the one unwrapped row is returned.
+ */
+export function wrapRow(prefix: string, text: string, width: number | undefined): string[] {
+	const prefixWidth = visibleWidth(prefix);
+	if (width === undefined || width - prefixWidth < WRAP_MIN || visibleWidth(text) <= width - prefixWidth) return [prefix + text];
+	const rows = wrapTextWithAnsi(text, width - prefixWidth);
+	const hang = " ".repeat(prefixWidth);
+	return rows.map((row, i) => (i === 0 ? prefix : hang) + row);
+}
+
+/** Styled lines for one entry: summary lines, then the tail, each wrapped to `width` when given. */
+export function entryLines(entry: ActionEntry, style: PanelStyle, now = Date.now(), width?: number): string[] {
 	const color = stripColor(entry);
 	const indent = entry.parentId === undefined ? "" : NESTED_INDENT;
 	const glyph = color === "muted" ? RUNNING : DONE;
-	const summary = summarize(entry);
+	const summary = summarize(entry, { full: true });
 	const lines: string[] = [];
 	summary.forEach((text, i) => {
 		if (i > 0) {
-			lines.push(indent + " ".repeat(glyph.length) + text);
+			// A continuation line's own indent joins the prefix, so its wrapped rows hang under its text.
+			const lead = /^ */.exec(text)![0];
+			lines.push(...wrapRow(indent + " ".repeat(glyph.length) + lead, text.slice(lead.length), width));
 			return;
 		}
 		const tail: string[] = [];
@@ -140,11 +138,11 @@ export function entryLines(entry: ActionEntry, style: PanelStyle, now = Date.now
 		if (head === entry.name || head.startsWith(`${entry.name} `)) {
 			head = style.fg(color, style.bold(entry.name)) + head.slice(entry.name.length);
 		}
-		lines.push(indent + style.fg(color, glyph) + head + tail.join(""));
+		lines.push(...wrapRow(indent + style.fg(color, glyph), head + tail.join(""), width));
 	});
 	const tailIndent = indent + " ".repeat(glyph.length);
 	for (const line of entry.tail) {
-		lines.push(tailIndent + style.fg("dim", TAIL_PREFIX) + style.fg("muted", line));
+		lines.push(...wrapRow(tailIndent + style.fg("dim", TAIL_PREFIX), style.fg("muted", line), width));
 	}
 	return lines;
 }
@@ -161,15 +159,16 @@ export function groupHeader(label: string, width: number, style: PanelStyle): st
 }
 
 /**
- * The scrollable body: every group in order, each opened by a header `headerWidth` wide carrying its
- * label and followed by its entries' lines, or a dim "(no actions)" when it has none; a blank line
- * separates groups, and a dim dashed rule separates the steps within one. Entries whose group is
- * not listed are grouped on their own. Also reports the first line of each step and group.
+ * The scrollable body: every group in order, each opened by a header `width` wide carrying its
+ * label and followed by its entries' lines wrapped to `width`, or a dim "(no actions)" when it has
+ * none; a blank line separates groups, and a dim dashed rule separates the steps within one.
+ * Entries whose group is not listed are grouped on their own. Also reports the first line of each
+ * step and group.
  */
 export function bodyLayout(
 	groups: number[],
 	entries: ActionEntry[],
-	headerWidth: number,
+	width: number,
 	style: PanelStyle,
 	label: (group: number) => string = () => "",
 	now = Date.now(),
@@ -187,7 +186,7 @@ export function bodyLayout(
 	order.forEach((group, i) => {
 		if (i > 0) lines.push("");
 		groupAt.set(group, lines.length);
-		lines.push(groupHeader(label(group), headerWidth, style));
+		lines.push(groupHeader(label(group), width, style));
 		const list = byGroup.get(group);
 		if (!list) {
 			lines.push(style.fg("dim", NO_ACTIONS));
@@ -200,7 +199,7 @@ export function bodyLayout(
 				step = entry.step;
 				if (!stepAt.has(step)) stepAt.set(step, lines.length);
 			}
-			lines.push(...entryLines(entry, style, now));
+			lines.push(...entryLines(entry, style, now, width));
 		}
 	});
 	return { lines, stepAt, groupAt };
@@ -211,31 +210,10 @@ export function bodyLines(...args: Parameters<typeof bodyLayout>): string[] {
 	return bodyLayout(...args).lines;
 }
 
-/** The widest entry line, which bounds how far the view can pan; headers are not counted since they stretch to fit. */
-export function entriesWidth(entries: ActionEntry[], style: PanelStyle, now = Date.now()): number {
-	let widest = 0;
-	for (const entry of entries.slice(-MAX_ENTRIES)) {
-		for (const line of entryLines(entry, style, now)) widest = Math.max(widest, visibleWidth(line));
-	}
-	return widest;
-}
-
 /** Scroll offset clamped so the viewport never runs past the body, or pinned to the end. */
 export function viewportTop(bodyHeight: number, viewportHeight: number, top: number, pinned: boolean): number {
 	const max = Math.max(0, bodyHeight - viewportHeight);
 	return pinned ? max : Math.min(Math.max(0, top), max);
-}
-
-/** The text a selection covers: the first line from its start column, whole lines between, the last through its end column. */
-export function selectedText(lines: string[], selection: { anchor: Cell; focus: Cell }): string {
-	const [start, end] = ordered({ ...selection, settled: false });
-	const out: string[] = [];
-	for (let line = start.line; line <= end.line && line < lines.length; line++) {
-		const from = line === start.line ? start.col : 0;
-		const to = line === end.line ? end.col + 1 : Number.POSITIVE_INFINITY;
-		out.push(sliceByColumn(lines[line]!, from, to - from).trimEnd());
-	}
-	return out.join("\n");
 }
 
 export class ActionsPanel implements Component {
@@ -249,18 +227,16 @@ export class ActionsPanel implements Component {
 	private terminal: PanelTerminal;
 	private done: () => void;
 	private top = 0;
-	private pan = 0;
 	private pinned = true;
 	/** Where to scroll on the next paint, cleared once applied. */
 	private target: PanelTarget | undefined;
 	private timer: ReturnType<typeof setInterval> | undefined;
-	private selection: Selection | undefined;
+	private readonly selection = new TextSelection();
 	private copiedUntil = 0;
-	/** The body as last painted, unstyled, with the viewport's offsets and size, for mapping the pointer to text. */
-	private painted: { lines: string[]; top: number; pan: number; height: number; width: number } = {
+	/** The body as last painted, unstyled, with the viewport's offset and size, for mapping the pointer to text. */
+	private painted: { lines: string[]; top: number; height: number; width: number } = {
 		lines: [],
 		top: 0,
-		pan: 0,
 		height: 0,
 		width: 0,
 	};
@@ -303,7 +279,7 @@ export class ActionsPanel implements Component {
 
 	handleInput(data: string): void {
 		const height = this.viewportHeight();
-		this.selection = undefined;
+		this.selection.clear();
 		if (matchesKey(data, "escape") || data === "q" || matchesKey(data, "space") || matchesKey(data, "alt+t")) {
 			this.done();
 		} else if (matchesKey(data, "up")) {
@@ -314,12 +290,6 @@ export class ActionsPanel implements Component {
 			this.scrollBy(-height);
 		} else if (matchesKey(data, "pageDown")) {
 			this.scrollBy(height);
-		} else if (matchesKey(data, "left")) {
-			this.pan = Math.max(0, this.pan - PAN_STEP);
-		} else if (matchesKey(data, "right")) {
-			this.pan += PAN_STEP;
-		} else if (data === "0") {
-			this.pan = 0;
 		} else if (matchesKey(data, "home") || data === "g") {
 			this.top = 0;
 			this.pinned = false;
@@ -331,23 +301,23 @@ export class ActionsPanel implements Component {
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event.type === "wheel") {
-			const delta = Math.sign(event.wheelDelta ?? 0);
-			// Shift+wheel reports as vertical: wheel-down pans left, wheel-up pans right, so a trackpad swipe tracks the content.
-			if (event.shift) this.pan = Math.max(0, this.pan - delta * PAN_STEP);
-			else this.scrollBy(delta * WHEEL_LINES);
+			this.scrollBy(Math.sign(event.wheelDelta ?? 0) * WHEEL_LINES);
 			return { handled: true, render: true };
 		}
-		if (this.selection && !this.selection.settled) return this.selectionEvent(event);
+		if (this.selection.dragging) {
+			const { result, copy } = this.selection.drag(event, (x, y, edges) => this.cellAt(x, y, edges), this.painted.lines);
+			if (copy !== undefined) this.copy(copy);
+			return result;
+		}
 		if (event.button !== "left") return { handled: true };
 		if (event.type === "press") {
-			this.selection = undefined;
 			const cell = this.cellAt(event.x, event.y, false);
-			if (cell) this.selection = { anchor: cell, focus: cell, settled: false };
+			this.selection.press(cell);
 			return { capture: cell !== undefined, handled: true, render: true };
 		}
 		if (event.type === "click" && (event.clickCount ?? 1) >= 2) {
 			const cell = this.cellAt(event.x, event.y, false);
-			if (cell) this.copyLine(cell.line);
+			if (cell) this.copy(this.selection.selectLine(this.painted.lines, cell.line));
 			return { handled: true, render: true };
 		}
 		return { handled: true };
@@ -360,8 +330,7 @@ export class ActionsPanel implements Component {
 		const height = this.viewportHeight();
 		const entries = this.entries();
 		const now = Date.now();
-		this.pan = clamp(this.pan, 0, Math.max(0, entriesWidth(entries, th, now) - content));
-		const layout = bodyLayout(this.groups(), entries, content + this.pan, th, this.label, now);
+		const layout = bodyLayout(this.groups(), entries, content, th, this.label, now);
 		const body = layout.lines;
 		for (let i = 0; i < BODY_PAD_BOTTOM; i++) body.push("");
 		if (this.target) {
@@ -374,11 +343,11 @@ export class ActionsPanel implements Component {
 		}
 		this.top = viewportTop(body.length, height, this.top, this.pinned);
 		this.pinned = this.top >= body.length - height;
-		this.painted = { lines: body.map(stripTerminalSequences), top: this.top, pan: this.pan, height, width: content };
+		this.painted = { lines: body.map(stripTerminalSequences), top: this.top, height, width: content };
 		const view: string[] = [];
 		for (let row = 0; row < height; row++) {
 			const line = this.top + row;
-			view.push(this.highlighted(sliceByColumn(body[line] ?? "", this.pan, content), line, content));
+			view.push(highlightSelection(sliceByColumn(body[line] ?? "", 0, content), line, content, this.selection.current, (t) => th.inverse(t)));
 		}
 
 		const row = (text: string): string => {
@@ -396,16 +365,13 @@ export class ActionsPanel implements Component {
 			(this.title ? th.fg("muted", `${this.title} `) : "") +
 			th.fg("dim", `${entries.length}${running ? ` · ${running} running` : ""} `);
 		const copied = Date.now() < this.copiedUntil;
-		const panned = this.pan > 0 ? `→ ${this.pan} · ` : "";
-		const hint = copied
-			? th.fg("success", " copied ")
-			: th.fg("dim", ` ${panned}esc close · ↑↓ scroll `);
-		return [rule(title, "╭", "╮"), ...view.map(row), rule(hint, "╰", "╯")];
+		const status = copied ? th.fg("success", "copied") : th.fg("dim", "esc close · ↑↓ scroll");
+		return [rule(title, "╭", "╮"), ...view.map(row), row(status), rule("", "╰", "╯")];
 	}
 
-	/** Rows left for entries inside the top and bottom rules. */
+	/** Rows left for entries inside the top rule, the status row, and the bottom rule. */
 	private viewportHeight(): number {
-		return Math.max(1, panelRows(this.rows()) - 2);
+		return Math.max(1, panelRows(this.rows()) - 3);
 	}
 
 	private scrollBy(lines: number): void {
@@ -415,39 +381,14 @@ export class ActionsPanel implements Component {
 
 	/** Map a component-local point to the body cell under it; with `clampEdges` a point outside snaps to the nearest cell. */
 	private cellAt(x: number, y: number, clampEdges: boolean): Cell | undefined {
-		const { lines, top, pan, height, width } = this.painted;
+		const { lines, top, height, width } = this.painted;
 		if (lines.length === 0) return undefined;
 		const bodyX = x - FRAME_X;
 		const bodyY = y - 1;
 		const inside = bodyX >= 0 && bodyX < width && bodyY >= 0 && bodyY < height;
 		if (!clampEdges && !inside) return undefined;
 		const line = clamp(top + clamp(bodyY, 0, height - 1), 0, lines.length - 1);
-		return { line, col: pan + clamp(bodyX, 0, width - 1) };
-	}
-
-	/** Grow the selection while the button is held; on release copy what it covers and leave it highlighted, or drop it when it never moved. */
-	private selectionEvent(event: TuiMouseEvent): TuiMouseEventResult {
-		const selection = this.selection!;
-		if (event.type === "drag" || event.type === "move") {
-			const cell = this.cellAt(event.x, event.y, true);
-			if (cell) this.selection = { ...selection, focus: cell };
-			return { handled: true, render: true };
-		}
-		if (event.type === "release") {
-			const moved = before(selection.anchor, selection.focus) || before(selection.focus, selection.anchor);
-			this.selection = moved ? { ...selection, settled: true } : undefined;
-			if (moved) this.copy(selectedText(this.painted.lines, selection));
-			return { handled: true, render: true };
-		}
-		return { handled: true };
-	}
-
-	/** Select a whole body line and copy it, as a double click does. */
-	private copyLine(line: number): void {
-		const text = this.painted.lines[line] ?? "";
-		const end = Math.max(0, visibleWidth(text) - 1);
-		this.selection = { anchor: { line, col: 0 }, focus: { line, col: end }, settled: true };
-		this.copy(text.trimEnd());
+		return { line, col: clamp(bodyX, 0, width - 1) };
 	}
 
 	private copy(text: string): void {
@@ -455,22 +396,5 @@ export class ActionsPanel implements Component {
 		void copyToClipboard(text, this.terminal);
 		this.copiedUntil = Date.now() + COPIED_MS;
 		setTimeout(() => this.requestRender(), COPIED_MS).unref?.();
-	}
-
-	/**
-	 * Paint the selected span of a visible line in inverse video, padding the line out first so a
-	 * selection past its end still shows. `text` is already panned; selection columns are body
-	 * columns, so the pan is subtracted.
-	 */
-	private highlighted(text: string, line: number, width: number): string {
-		if (!this.selection) return text;
-		const [start, end] = ordered(this.selection);
-		if (line < start.line || line > end.line) return text;
-		const from = Math.max(0, (line === start.line ? start.col : 0) - this.pan);
-		const to = Math.min(width - 1, (line === end.line ? end.col : Number.POSITIVE_INFINITY) - this.pan);
-		if (from > to) return text;
-		const padded = text + " ".repeat(Math.max(0, width - visibleWidth(text)));
-		const span = stripTerminalSequences(sliceByColumn(padded, from, to - from + 1));
-		return sliceByColumn(padded, 0, from) + this.theme.inverse(span) + sliceByColumn(padded, to + 1, width - to - 1);
 	}
 }

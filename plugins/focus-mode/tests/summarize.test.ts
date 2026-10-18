@@ -28,6 +28,12 @@ describe("summarize", () => {
 		assert.deepEqual(summarize(tool("bash", { command: "false" }, done(undefined, true))), ["$ false error"]);
 	});
 
+	it("breaks a full bash summary one step per line, indented under the command", () => {
+		const item = tool("bash", { command: "cd x && make\nls | wc -l" }, done(undefined, true));
+		assert.deepEqual(summarize(item, { full: true }), ["$ cd x error", "  && make", "  ls", "  | wc -l"]);
+		assert.deepEqual(summarize(tool("bash", { command: "a | b" }), { full: true }), ["\u2026 $ a", "    | b"]);
+	});
+
 	it("shows key arguments for read, ls, grep, find", () => {
 		assert.deepEqual(summarize(tool("read", { path: "a.ts" }, done(undefined))), ["read a.ts"]);
 		assert.deepEqual(summarize(tool("ls", { path: "src" }, done(undefined))), ["ls src"]);

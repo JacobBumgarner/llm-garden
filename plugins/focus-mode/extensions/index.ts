@@ -14,8 +14,9 @@
  *   alt+t or /actions opens a centered modal panel that streams every call with its status,
  *   duration, and the tail of its output under a header carrying the prompt that started the turn,
  *   with a dashed rule between steps; a click on a counter opens it scrolled to that counter's
- *   calls. It follows new calls while scrolled to the end, pans sideways, and a drag inside it
- *   copies the selected text.
+ *   calls. Long bash commands break one pipeline step per line and every line wraps to the panel
+ *   width. It follows new calls while scrolled to the end, and a drag inside it copies the
+ *   selected text.
  * - `strips`: a tool renderer resolver replaces the renderers of every tool, registered or not, with
  *   a strip that shows the summary from `summarize.ts`; a click expands it to the arguments and
  *   capped result text (the colored diff for an edit). A running strip redraws once a second so its
