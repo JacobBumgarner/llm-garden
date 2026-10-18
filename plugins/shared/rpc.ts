@@ -44,14 +44,13 @@ export type DelegateSpawn = (
 ) => DelegateChild;
 
 /**
- * The child's environment: the orchestrator's, with cmux's pi hooks turned off.
+ * The child's environment: the parent's, with cmux's pi hooks turned off.
  *
  * A child inherits `CMUX_SURFACE_ID`, so the cmux-generated pi extension it loads would report
- * the child's session start, every tool call, and its stop to the orchestrator's sidebar
- * entry. That flips the entry back to "running" after the orchestrator reports done and
- * clears its "needs input" state while a question is open. The parent reports the child
- * instead: SubagentStart/SubagentStop feed events from the `subagent` tool call, and the
- * workspace progress bar from cmux.ts while any run is live.
+ * the child's session start, every tool call, and its stop to the parent's sidebar entry.
+ * That flips the entry back to "running" after the parent reports done and clears its
+ * "needs input" state while a question is open. Setting `CMUX_PI_HOOKS_DISABLED` keeps the
+ * child quiet, so only the parent reports to cmux.
  */
 export function childEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	return { ...base, CMUX_PI_HOOKS_DISABLED: "1" };
@@ -130,6 +129,11 @@ export class DelegateClient {
 
 	async abort(): Promise<void> {
 		await this.command({ type: "abort" });
+	}
+
+	/** Set the child session's display name, which the session list shows. */
+	async setSessionName(name: string): Promise<void> {
+		await this.command({ type: "set_session_name", name });
 	}
 
 	getMessages(): Promise<AgentMessage[]> {

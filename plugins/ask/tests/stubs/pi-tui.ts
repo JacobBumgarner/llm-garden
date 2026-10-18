@@ -113,10 +113,19 @@ interface MarkdownTheme {
 export class Markdown {
 	private readonly text: string;
 	private readonly theme: MarkdownTheme;
+	private readonly style?: { color?: (t: string) => string; bgColor?: (t: string) => string };
 
-	constructor(text: string, _x: number, _y: number, theme: MarkdownTheme) {
+	constructor(
+		text: string,
+		_x: number,
+		_y: number,
+		theme: MarkdownTheme,
+		style?: { color?: (t: string) => string; bgColor?: (t: string) => string },
+		_options?: { preserveOrderedListMarkers?: boolean; preserveBackslashEscapes?: boolean },
+	) {
 		this.text = text;
 		this.theme = theme;
+		this.style = style;
 	}
 
 	render(width: number): string[] {
@@ -131,7 +140,8 @@ export class Markdown {
 			const indent = inCode ? (this.theme.codeBlockIndent ?? "  ") : "";
 			out.push(...wrapTextWithAnsi(indent + line, width));
 		}
-		return out;
+		const { color, bgColor } = this.style ?? {};
+		return color || bgColor ? out.map((l) => (bgColor ?? ((t: string) => t))((color ?? ((t: string) => t))(l))) : out;
 	}
 }
 

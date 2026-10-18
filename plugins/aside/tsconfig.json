@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"strict": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"skipLibCheck": true,
+		"types": ["node"]
+	},
+	"include": ["../aside/**/*.ts", "../shared/**/*.ts"],
+	"exclude": ["**/tests/**"]
+}

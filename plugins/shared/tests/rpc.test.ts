@@ -144,6 +144,16 @@ test("responses resolve the pending command with the same id, in any order", asy
 	assert.equal(await first, "started");
 });
 
+test("setSessionName sends set_session_name with the name", async () => {
+	const { child, client } = await started();
+	const done = client.setSessionName("my work");
+	const record = child.records().at(-1);
+	assert.equal(record.type, "set_session_name");
+	assert.equal(record.name, "my work");
+	child.reply({ type: "response", id: record.id, command: "set_session_name", success: true });
+	await done;
+});
+
 test("a failed response rejects with the child's error", async () => {
 	const { child, client } = await started();
 	const result = client.followUp("x");
