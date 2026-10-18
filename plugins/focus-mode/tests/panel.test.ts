@@ -231,6 +231,26 @@ describe("ActionsPanel", () => {
 		assert.equal(Buffer.from(payload, "base64").toString("utf8"), "○ … read first\n○ … read");
 	});
 
+	it("keeps scrolling and selecting while a drag is held below the body", async () => {
+		const entries = Array.from({ length: 30 }, (_, i) => entry({ id: `${i}`, name: "read", args: { path: `f${i}` } }));
+		const { component, written } = panel(entries, 8);
+		component.render(40);
+		component.handleInput("home");
+		const first = component.render(40);
+		assert.ok(first.join("\n").includes("read f0"), first.join("\n"));
+		component.handleMouse(mouse("press", 0, 0));
+		component.handleMouse(mouse("drag", 7, 100));
+		await new Promise((r) => setTimeout(r, 260));
+		const moved = component.render(40);
+		assert.ok(!moved.join("\n").includes("read f0"), "the viewport moved");
+		component.handleMouse(mouse("release", 7, 100));
+		component.dispose();
+		const payload = written[0]!.match(/52;c;([^\x07]+)/)![1]!;
+		const copied = Buffer.from(payload, "base64").toString("utf8");
+		const reach = Math.max(...[...copied.matchAll(/read f(\d+)/g)].map((m) => Number(m[1])));
+		assert.ok(reach > 4, `the selection grew past the first page, reached f${reach}`);
+	});
+
 	it("copies a word on double click", () => {
 		const { component, written } = panel([entry({ id: "a", name: "read", args: { path: "f.ts" } })], 6);
 		component.render(40);

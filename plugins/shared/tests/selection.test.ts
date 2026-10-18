@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
-import { before, type Cell, cellAt as paintedCellAt, highlightSelection, ordered, type PaintedText, selectedText, TextSelection } from "../selection.ts";
+import { before, type Cell, cellAt as paintedCellAt, DragAutoScroll, highlightSelection, ordered, type PaintedText, selectedText, TextSelection } from "../selection.ts";
 
 const lines = ["abcdef", "ghijkl", "mnopqr"];
 const mark = (s: string) => `[${s}]`;
@@ -202,5 +202,90 @@ describe("highlightSelection with a pan", () => {
 	test("shifts the selection columns left by the pan", () => {
 		const sel = { anchor: { line: 0, col: 4 }, focus: { line: 0, col: 5 } };
 		assert.equal(highlightSelection("efgh", 0, 4, sel, mark, 3), "e[fg]h");
+	});
+});
+
+describe("DragAutoScroll", () => {
+	function setup() {
+		const ticks: Array<() => void> = [];
+		const log: string[] = [];
+		let live = 0;
+		const timers = {
+			set(tick: () => void, ms: number) {
+				assert.equal(ms, 50);
+				ticks.push(tick);
+				live++;
+				return ticks.length;
+			},
+			clear() {
+				live--;
+			},
+		};
+		const scroll = new DragAutoScroll({ scrollBy: (n) => log.push(`scroll ${n}`), onTick: () => log.push("tick"), timers });
+		return { scroll, ticks, log, live: () => live };
+	}
+
+	test("starts on an edge event and ticks scrollBy then onTick", () => {
+		const { scroll, ticks, log, live } = setup();
+		scroll.update({ x: 3, y: 12 }, 2, 10);
+		assert.equal(live(), 1);
+		ticks[0]!();
+		ticks[0]!();
+		assert.deepEqual(log, ["scroll 1", "tick", "scroll 1", "tick"]);
+		assert.deepEqual(scroll.pointer, { x: 3, y: 12 });
+	});
+
+	test("scrolls up at or above the top edge", () => {
+		const { scroll, ticks, log } = setup();
+		scroll.update({ x: 0, y: 2 }, 2, 10);
+		ticks[0]!();
+		assert.deepEqual(log, ["scroll -1", "tick"]);
+	});
+
+	test("keeps one timer across edge events and follows the latest pointer", () => {
+		const { scroll, ticks, live } = setup();
+		scroll.update({ x: 0, y: 11 }, 2, 10);
+		scroll.update({ x: 9, y: 14 }, 2, 10);
+		assert.equal(ticks.length, 1);
+		assert.equal(live(), 1);
+		assert.deepEqual(scroll.pointer, { x: 9, y: 14 });
+	});
+
+	test("stops when the pointer returns inside the body", () => {
+		const { scroll, live } = setup();
+		scroll.update({ x: 0, y: 11 }, 2, 10);
+		scroll.update({ x: 0, y: 5 }, 2, 10);
+		assert.equal(live(), 0);
+	});
+
+	test("stop clears the timer, and a stopped timer's late tick does nothing", () => {
+		const { scroll, ticks, log, live } = setup();
+		scroll.update({ x: 0, y: 11 }, 2, 10);
+		scroll.stop();
+		assert.equal(live(), 0);
+		ticks[0]!();
+		assert.deepEqual(log, []);
+	});
+
+	test("dispose clears the timer and the pointer", () => {
+		const { scroll, live } = setup();
+		scroll.update({ x: 0, y: 11 }, 2, 10);
+		scroll.dispose();
+		assert.equal(live(), 0);
+		assert.equal(scroll.pointer, undefined);
+	});
+});
+
+describe("TextSelection.extend", () => {
+	test("moves the focus of a held selection and ignores a settled or absent one", () => {
+		const selection = new TextSelection();
+		selection.extend({ line: 1, col: 1 });
+		assert.equal(selection.current, undefined);
+		selection.press({ line: 0, col: 0 });
+		selection.extend({ line: 2, col: 3 });
+		assert.deepEqual(selection.current?.focus, { line: 2, col: 3 });
+		selection.drag(mouse("release"), cellAt, lines);
+		selection.extend({ line: 0, col: 0 });
+		assert.deepEqual(selection.current?.focus, { line: 2, col: 3 });
 	});
 });

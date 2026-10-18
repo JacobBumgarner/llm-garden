@@ -263,6 +263,24 @@ test("dragging over the code column highlights only that column and copies the c
 	assert.doesNotMatch(form.render(160)[header + 1], /\[/);
 });
 
+test("a drag held below the code column keeps scrolling it and growing the selection", async () => {
+	const { form } = mount();
+	let lines = form.render(160);
+	const header = lineOf(lines, /lines 1–/);
+	const codeX = lines[header + 1].indexOf("const line0");
+	written.length = 0;
+	form.handleMouse(mouse("press", codeX, header + 1));
+	form.handleMouse(mouse("drag", codeX + 5, ROWS + 20));
+	await new Promise((r) => setTimeout(r, 260));
+	lines = form.render(160);
+	assert.doesNotMatch(lines.join("\n"), /lines 1–/, "the code column scrolled");
+	form.handleMouse(mouse("release", codeX + 5, ROWS + 20));
+	form.dispose();
+	const copied = lastCopy();
+	const reach = Math.max(...[...copied.matchAll(/const line(\d+)/g)].map((m) => Number(m[1])));
+	assert.ok(reach >= 5, `the copy reaches line${reach}, past the first screen`);
+});
+
 test("dragging over the option column highlights and copies only that column, and a still press copies nothing", () => {
 	const { form } = mount();
 	let lines = form.render(160);

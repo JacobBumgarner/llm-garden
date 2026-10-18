@@ -146,6 +146,11 @@ export class TextSelection {
 		this.current = cell ? { anchor: cell, focus: cell, settled: false } : undefined;
 	}
 
+	/** Move the focus of a held selection to `cell`. Does nothing when no selection is held. */
+	extend(cell: Cell | undefined): void {
+		if (cell && this.current && !this.current.settled) this.current = { ...this.current, focus: cell };
+	}
+
 	/**
 	 * Handle an event while `dragging`. A drag or move grows the selection to the cell under the pointer.
 	 * A release settles it and reports the text to copy, or drops it when it never moved.
@@ -205,5 +210,68 @@ export class TextSelection {
 		const end = Math.max(0, visibleWidth(text) - 1);
 		this.current = { anchor: { line, col: 0 }, focus: { line, col: end }, settled: true };
 		return text.trimEnd();
+	}
+}
+
+/** How often a held drag past the body's edge scrolls, as pi-tui's transcript does. */
+const AUTO_SCROLL_MS = 50;
+
+/** Timer functions `DragAutoScroll` runs on, replaceable in tests. */
+export interface AutoScrollTimers {
+	set(tick: () => void, ms: number): unknown;
+	clear(handle: unknown): void;
+}
+
+const realTimers: AutoScrollTimers = {
+	set(tick, ms) {
+		const handle = setInterval(tick, ms);
+		handle.unref();
+		return handle;
+	},
+	clear: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+};
+
+/**
+ * Keep a drag going while the pointer sits past the top or bottom of a body. Terminals report a drag only
+ * on motion, so a held pointer needs a timer. Each tick calls `scrollBy` with the direction, then `onTick`,
+ * where the panel re-lays out and extends the selection to the `pointer`.
+ */
+export class DragAutoScroll {
+	/** The last pointer position `update` saw. */
+	pointer: { x: number; y: number } | undefined;
+	private direction: -1 | 0 | 1 = 0;
+	private timer: unknown;
+	private readonly o: { scrollBy(lines: number): void; onTick(): void; timers?: AutoScrollTimers };
+
+	constructor(options: { scrollBy(lines: number): void; onTick(): void; timers?: AutoScrollTimers }) {
+		this.o = options;
+	}
+
+	/** Record the pointer. At or above `bodyTop` the drag scrolls up, at or below `bodyBottom` down, between them it stops. */
+	update(event: { x: number; y: number }, bodyTop: number, bodyBottom: number): void {
+		this.pointer = { x: event.x, y: event.y };
+		this.direction = event.y <= bodyTop ? -1 : event.y >= bodyBottom ? 1 : 0;
+		if (this.direction === 0) return this.stop();
+		if (this.timer !== undefined) return;
+		this.timer = (this.o.timers ?? realTimers).set(() => this.tick(), AUTO_SCROLL_MS);
+	}
+
+	/** Stop scrolling. */
+	stop(): void {
+		if (this.timer !== undefined) (this.o.timers ?? realTimers).clear(this.timer);
+		this.timer = undefined;
+		this.direction = 0;
+	}
+
+	/** Stop scrolling and forget the pointer. */
+	dispose(): void {
+		this.stop();
+		this.pointer = undefined;
+	}
+
+	private tick(): void {
+		if (this.direction === 0) return this.stop();
+		this.o.scrollBy(this.direction);
+		this.o.onTick();
 	}
 }

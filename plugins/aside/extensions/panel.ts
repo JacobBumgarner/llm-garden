@@ -24,7 +24,7 @@ import {
 import { CopyFeedback } from "../../shared/copy-feedback.ts";
 import { editorTheme } from "../../shared/editor-theme.ts";
 import type { PromptDisposition } from "../../shared/rpc.ts";
-import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
+import { cellAt, DragAutoScroll, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import { Viewport } from "../../shared/viewport.ts";
 
 export const TOGGLE_KEY = "alt+/";
@@ -146,6 +146,10 @@ export class AsidePanel implements Component, Focusable {
 	private bodyRows = 10;
 	private readonly selection = new TextSelection();
 	private readonly feedback: CopyFeedback;
+	private readonly autoScroll = new DragAutoScroll({
+		scrollBy: (lines) => this.viewport.scrollBy(lines),
+		onTick: () => this.autoScrollTick(),
+	});
 	/** The transcript as last painted, unstyled, for mapping the pointer to text. */
 	private painted: PaintedText = { lines: [], x: 0, y: 0, width: 0, height: 0, top: 0, pan: 0 };
 	private _focused = false;
@@ -178,6 +182,7 @@ export class AsidePanel implements Component, Focusable {
 
 	handleInput(data: string): void {
 		this.selection.clear();
+		this.autoScroll.stop();
 		if (matchesKey(data, TOGGLE_KEY)) this.o.hide();
 		else if (matchesKey(data, "escape")) this.escape();
 		else if (matchesKey(data, "enter")) this.submit();
@@ -193,6 +198,10 @@ export class AsidePanel implements Component, Focusable {
 		if (this.selection.dragging) {
 			const { result, copy } = this.selection.drag(event, (x, y, edges) => cellAt(this.painted, x, y, edges), this.painted.lines);
 			if (copy !== undefined) this.feedback.copy(copy);
+			if (!this.selection.dragging) this.autoScroll.stop();
+			else if (event.type === "drag" || event.type === "move") {
+				this.autoScroll.update(event, this.painted.y, this.painted.y + this.painted.height - 1);
+			}
 			return result;
 		}
 		if (event.button !== "left") return { handled: true };
@@ -236,8 +245,17 @@ export class AsidePanel implements Component, Focusable {
 	}
 
 	dispose(): void {
+		this.autoScroll.dispose();
 		this.feedback.dispose();
 		this.unsubscribe();
+	}
+
+	/** Re-lay out after an auto-scroll step and pull the selection's focus to the cell under the held pointer. */
+	private autoScrollTick(): void {
+		const pointer = this.autoScroll.pointer;
+		this.painted.top = this.viewport.layout(this.painted.lines.length, this.painted.height);
+		if (pointer) this.selection.extend(cellAt(this.painted, pointer.x, pointer.y, true));
+		this.o.tui.requestRender();
 	}
 
 	private transcriptLines(width: number): string[] {

@@ -25,7 +25,7 @@ import {
 import { clamp } from "../../shared/clamp.ts";
 import { CopyFeedback } from "../../shared/copy-feedback.ts";
 import { editorTheme } from "../../shared/editor-theme.ts";
-import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
+import { cellAt, DragAutoScroll, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import { WHEEL_LINES } from "../../shared/viewport.ts";
 import { CHORDS, isPrintable, type KeyName, NAV_KEYS, unwrapPaste } from "./keys.ts";
 import {
@@ -193,6 +193,11 @@ export class AskForm implements Component, Focusable {
 	private optionLines: string[] = [];
 	/** Each column selects on its own, so a drag never crosses the rule. */
 	private readonly selections: Record<ScrollTarget, TextSelection> = { options: new TextSelection(), code: new TextSelection() };
+	/** One per column: a drag past a column's top or bottom keeps scrolling it and growing its selection. */
+	private readonly autoScrolls: Record<ScrollTarget, DragAutoScroll> = {
+		options: new DragAutoScroll({ scrollBy: (lines) => this.scrollPane("options", lines), onTick: () => this.autoScrollTick("options") }),
+		code: new DragAutoScroll({ scrollBy: (lines) => this.scrollPane("code", lines), onTick: () => this.autoScrollTick("code") }),
+	};
 	private readonly feedback: CopyFeedback;
 	/** Set when an editor's onSubmit ran inside handleInput; the editor's text is then stale for the next state, so it must not be sent as a draft. */
 	private submitted = false;
@@ -225,6 +230,8 @@ export class AskForm implements Component, Focusable {
 	}
 
 	dispose(): void {
+		this.autoScrolls.options.dispose();
+		this.autoScrolls.code.dispose();
 		this.feedback.dispose();
 	}
 
@@ -271,6 +278,8 @@ export class AskForm implements Component, Focusable {
 		const had = this.selections.code.current !== undefined || this.selections.options.current !== undefined;
 		this.selections.code.clear();
 		this.selections.options.clear();
+		this.autoScrolls.code.stop();
+		this.autoScrolls.options.stop();
 		return had;
 	}
 
@@ -312,7 +321,27 @@ export class AskForm implements Component, Focusable {
 		}
 		const { result, copy } = this.selections[pane].drag(event, (x, y, edges) => cellAt(painted, x, y, edges), painted.lines);
 		if (copy !== undefined) this.feedback.copy(copy);
+		const autoScroll = this.autoScrolls[pane];
+		if (!this.selections[pane].dragging) autoScroll.stop();
+		else if (event.type === "drag" || event.type === "move") autoScroll.update(event, painted.y, painted.y + painted.height - 1);
 		return result;
+	}
+
+	/** Scroll one column by `lines` lines, one step at a time through `scroll`. */
+	private scrollPane(pane: ScrollTarget, lines: number): void {
+		const key: KeyName = lines < 0 ? "shift+up" : "shift+down";
+		for (let i = 0; i < Math.abs(lines); i++) this.scroll(key, pane);
+	}
+
+	/** Point the column's painted top at its new scroll offset and pull the selection's focus to the cell under the held pointer. */
+	private autoScrollTick(pane: ScrollTarget): void {
+		const painted = this.panes[pane];
+		const pointer = this.autoScrolls[pane].pointer;
+		if (!painted) return;
+		const offset = pane === "options" ? this.windowOffset : (this.previewWindow?.offset ?? 0);
+		painted.top = clamp(offset, 0, Math.max(0, painted.lines.length - painted.height));
+		if (pointer) this.selections[pane].extend(cellAt(painted, pointer.x, pointer.y, true));
+		this.tui.requestRender();
 	}
 
 	/** The code lines without styling, as the clipboard should get them. */

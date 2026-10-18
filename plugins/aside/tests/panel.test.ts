@@ -389,6 +389,25 @@ describe("scrolling", () => {
 			assert.deepEqual(copies, ["world\n\nsecond"]);
 		});
 
+		it("keeps scrolling and selecting while a drag is held below the body", async () => {
+			const copies: string[] = [];
+			const { panel, backend } = setup(new FakeBackend(), 30, theme, (t) => void copies.push(t));
+			await tick();
+			longAnswer(backend, 60);
+			panel.render(60);
+			panel.handleInput("home");
+			const firstPage = text(panel);
+			const lastShown = Math.max(...[...firstPage.matchAll(/line (\d+)/g)].map((m) => Number(m[1])));
+			panel.handleMouse(mouse("press", 0, 0));
+			panel.handleMouse(mouse("drag", 5, 100));
+			await new Promise((r) => setTimeout(r, 260));
+			assert.ok(firstLine(panel) > 1, "the viewport moved");
+			panel.handleMouse(mouse("release", 5, 100));
+			panel.dispose();
+			const reach = Math.max(...[...copies[0]!.matchAll(/line (\d+)/g)].map((m) => Number(m[1])));
+			assert.ok(reach > lastShown, `the selection grew past line ${lastShown}, reached ${reach}`);
+		});
+
 		it("copies one word on a double click", async () => {
 			const { panel, copies } = await withText();
 			panel.handleMouse(mouse("click", 2, 2, { clickCount: 2 }));

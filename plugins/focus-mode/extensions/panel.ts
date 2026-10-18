@@ -31,7 +31,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { CopyFeedback } from "../../shared/copy-feedback.ts";
-import { cellAt, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
+import { cellAt, DragAutoScroll, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import { Viewport } from "../../shared/viewport.ts";
 import type { ActionEntry } from "./log.ts";
 import { durationLabel, stripColor } from "./strip.ts";
@@ -213,6 +213,10 @@ export class ActionsPanel implements Component {
 	private target: PanelTarget | undefined;
 	private readonly selection = new TextSelection();
 	private readonly feedback: CopyFeedback;
+	private readonly autoScroll = new DragAutoScroll({
+		scrollBy: (lines) => this.viewport.scrollBy(lines),
+		onTick: () => this.autoScrollTick(),
+	});
 	/** The body as last painted, unstyled, for mapping the pointer to text. */
 	private painted: PaintedText = { lines: [], x: 0, y: 0, width: 0, height: 0, top: 0, pan: 0 };
 
@@ -246,12 +250,22 @@ export class ActionsPanel implements Component {
 	invalidate(): void {}
 
 	dispose(): void {
+		this.autoScroll.dispose();
 		this.feedback.dispose();
+	}
+
+	/** Re-lay out after an auto-scroll step and pull the selection's focus to the cell under the held pointer. */
+	private autoScrollTick(): void {
+		const pointer = this.autoScroll.pointer;
+		this.painted.top = this.viewport.layout(this.painted.lines.length, this.painted.height);
+		if (pointer) this.selection.extend(cellAt(this.painted, pointer.x, pointer.y, true));
+		this.requestRender();
 	}
 
 	handleInput(data: string): void {
 		const height = this.viewportHeight();
 		this.selection.clear();
+		this.autoScroll.stop();
 		if (matchesKey(data, "escape") || data === "q" || matchesKey(data, "space") || matchesKey(data, "alt+t")) {
 			this.done();
 		} else {
@@ -268,6 +282,10 @@ export class ActionsPanel implements Component {
 		if (this.selection.dragging) {
 			const { result, copy } = this.selection.drag(event, (x, y, edges) => cellAt(this.painted, x, y, edges), this.painted.lines);
 			if (copy !== undefined) this.feedback.copy(copy);
+			if (!this.selection.dragging) this.autoScroll.stop();
+			else if (event.type === "drag" || event.type === "move") {
+				this.autoScroll.update(event, this.painted.y, this.painted.y + this.painted.height - 1);
+			}
 			return result;
 		}
 		if (event.button !== "left") return { handled: true };
