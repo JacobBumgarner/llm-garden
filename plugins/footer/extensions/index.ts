@@ -28,7 +28,7 @@
 
 import { basename } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ function hex(color: string, s: string): string {
 	return `\x1b[38;2;${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}m${s}${RESET}`;
 }
 
-const THINKING_COLOR: Record<string, string> = {
+const THINKING_COLOR: Record<string, ThemeColor> = {
 	off: "thinkingOff",
 	minimal: "thinkingMinimal",
 	low: "thinkingLow",
@@ -367,13 +367,17 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext) {
 			footerData.onBranchChange(render),
 			pi.on("model_select", render),
 			pi.on("agent_start", () => glyph.turnStart(ctx.model?.id ?? "")),
-			pi.on("message_start", (e) => isAssistant(e) && glyph.messageStart()),
+			pi.on("message_start", (e) => {
+				if (isAssistant(e)) glyph.messageStart();
+			}),
 			pi.on("message_update", (e) => {
 				const ev = e.assistantMessageEvent;
 				const chars = "delta" in ev ? ev.delta.length : 0;
 				glyph.delta(chars, "partial" in ev ? (ev.partial.usage?.output ?? 0) : 0);
 			}),
-			pi.on("message_end", (e) => isAssistant(e) && glyph.messageEnd()),
+			pi.on("message_end", (e) => {
+				if (isAssistant(e)) glyph.messageEnd();
+			}),
 			pi.on("tool_execution_start", () => glyph.toolStart()),
 			pi.on("tool_execution_end", () => glyph.toolEnd()),
 			pi.on("agent_end", () => glyph.turnEnd()),

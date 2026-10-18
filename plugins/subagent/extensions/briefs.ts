@@ -21,6 +21,7 @@ export interface BriefConfig {
 }
 
 interface BriefFrontmatter {
+	[key: string]: unknown;
 	name?: unknown;
 	description?: unknown;
 }

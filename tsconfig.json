@@ -9,6 +9,6 @@
 		"skipLibCheck": true,
 		"types": ["node"]
 	},
-	"include": ["../aside/**/*.ts", "../shared/**/*.ts"],
+	"include": ["plugins/*/extensions/**/*.ts", "plugins/*/api.ts", "plugins/shared/**/*.ts"],
 	"exclude": ["**/tests/**"]
 }

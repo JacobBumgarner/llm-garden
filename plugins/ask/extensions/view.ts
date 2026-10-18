@@ -3,7 +3,7 @@
  * state, and paints the rows that layout.ts decides on.
  */
 
-import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
 	type Color,
 	type Component,
@@ -11,6 +11,7 @@ import {
 	type EditorTheme,
 	type Focusable,
 	Markdown,
+	type KeyId,
 	matchesKey,
 	mixColors,
 	type TUI,
@@ -200,7 +201,7 @@ function classify(data: string): KeyName | null {
 	if (matchesKey(data, CHORDS.clarify)) return "clarify";
 	if (matchesKey(data, CHORDS.copy)) return "copy";
 	for (const [name, id] of Object.entries(NAV_KEYS)) {
-		if (matchesKey(data, id)) return name as KeyName;
+		if (matchesKey(data, id as KeyId)) return name as KeyName;
 	}
 	return isPrintable(data) ? "printable" : null;
 }
@@ -212,8 +213,8 @@ function pickedNumber(data: string): number | null {
 
 /** Return tab or shift+tab when the chunk is one, else null. */
 function editorTabKey(data: string): "tab" | "shift+tab" | null {
-	if (matchesKey(data, NAV_KEYS["shift+tab"])) return "shift+tab";
-	if (matchesKey(data, NAV_KEYS.tab)) return "tab";
+	if (matchesKey(data, NAV_KEYS["shift+tab"] as KeyId)) return "shift+tab";
+	if (matchesKey(data, NAV_KEYS.tab as KeyId)) return "tab";
 	return null;
 }
 
@@ -456,7 +457,7 @@ export class AskForm implements Component, Focusable {
 
 	private editorInput(data: string): void {
 		const which = this.state.mode;
-		if (matchesKey(data, NAV_KEYS.escape)) return this.dispatch({ type: "key", key: "escape" });
+		if (matchesKey(data, NAV_KEYS.escape as KeyId)) return this.dispatch({ type: "key", key: "escape" });
 		const editor = this.editorFor(which);
 		const tab = editorTabKey(data);
 		if (tab) {
@@ -720,7 +721,7 @@ export class AskForm implements Component, Focusable {
 	}
 
 	/** Paint a row's label: accent when it carries the cursor, a lighter accent under the pointer, else its resting color. */
-	private label(text: string, row: Row, resting?: string): string {
+	private label(text: string, row: Row, resting?: ThemeColor): string {
 		if ("highlighted" in row && row.highlighted) return this.theme.fg("accent", text);
 		const cursor = cursorOf(row);
 		if (cursor !== null && this.hovered({ kind: "row", cursor })) return this.theme.style(text, { fg: this.hoverColor() });

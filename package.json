@@ -27,7 +27,7 @@
   "scripts": {
     "test": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.test.ts'",
     "test:live": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.live.ts'",
-    "check:aside": "tsc --noEmit -p plugins/aside/tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "type": "module",
   "devDependencies": {
