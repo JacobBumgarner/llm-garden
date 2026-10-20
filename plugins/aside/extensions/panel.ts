@@ -29,9 +29,9 @@ import { Viewport } from "../../shared/viewport.ts";
 
 export const TOGGLE_KEY = "alt+/";
 /** Share of the terminal's rows the panel takes. The overlay clips lines past this, so the panel sizes its body to fit and keeps the editor on screen. */
-const HEIGHT_RATIO = 0.7;
-/** Share of the terminal's columns the panel takes: 5/9, a little over half, so the aside reads comfortably. */
-const WIDTH_RATIO = 5 / 9;
+const HEIGHT_RATIO = 0.85;
+/** Share of the terminal's columns the panel takes: 60%, a little over half, so the aside reads comfortably. */
+const WIDTH_RATIO = 0.6;
 export const OVERLAY_OPTIONS = {
 	anchor: "top-right",
 	width: `${(WIDTH_RATIO * 100).toFixed(2)}%` as `${number}%`,
