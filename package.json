@@ -27,6 +27,7 @@
   "scripts": {
     "test": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.test.ts'",
     "test:live": "node --import ./plugins/ask/tests/register.ts --test 'plugins/*/tests/*.live.ts'",
+    "test:py": "python3 -m unittest discover -s plugins/rubato/tests -p 'test_*.py'",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "type": "module",
