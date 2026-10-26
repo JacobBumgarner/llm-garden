@@ -12,6 +12,13 @@ import type { JsonAgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { getPiInvocation } from "./spawn.ts";
 
 export type PromptDisposition = "handled" | "queued" | "started";
+
+/** A model the child can switch to, as `get_available_models` reports it. */
+export interface DelegateModel {
+	provider: string;
+	id: string;
+	name?: string;
+}
 export type QueuedInputDisposition = "handled" | "queued";
 
 export const START_DEADLINE_MS = 15_000;
@@ -138,6 +145,18 @@ export class DelegateClient {
 
 	getMessages(): Promise<AgentMessage[]> {
 		return this.command({ type: "get_messages" }).then((data) => data.messages);
+	}
+
+	/** The models the child can switch to. */
+	getAvailableModels(): Promise<DelegateModel[]> {
+		return this.command({ type: "get_available_models" }).then((data) =>
+			(data.models as DelegateModel[]).map(({ provider, id, name }) => ({ provider, id, name })),
+		);
+	}
+
+	/** Switch the child's model for its next answers. */
+	async setModel(provider: string, modelId: string): Promise<void> {
+		await this.command({ type: "set_model", provider, modelId });
 	}
 
 	/** Subscribe to every record that is not a response or a dialog request. Returns the unsubscribe function. */

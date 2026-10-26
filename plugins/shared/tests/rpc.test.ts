@@ -154,6 +154,28 @@ test("setSessionName sends set_session_name with the name", async () => {
 	await done;
 });
 
+test("getAvailableModels and setModel use the model commands", async () => {
+	const { child, client } = await started();
+	const models = client.getAvailableModels();
+	let record = child.records().at(-1);
+	assert.equal(record.type, "get_available_models");
+	child.reply({
+		type: "response",
+		id: record.id,
+		command: "get_available_models",
+		success: true,
+		data: { models: [{ provider: "anthropic", id: "opus", name: "Opus", contextWindow: 1 }] },
+	});
+	assert.deepEqual(await models, [{ provider: "anthropic", id: "opus", name: "Opus" }]);
+	const set = client.setModel("anthropic", "opus");
+	record = child.records().at(-1);
+	assert.equal(record.type, "set_model");
+	assert.equal(record.provider, "anthropic");
+	assert.equal(record.modelId, "opus");
+	child.reply({ type: "response", id: record.id, command: "set_model", success: true, data: {} });
+	await set;
+});
+
 test("a failed response rejects with the child's error", async () => {
 	const { child, client } = await started();
 	const result = client.followUp("x");
