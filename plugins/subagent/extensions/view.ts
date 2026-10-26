@@ -515,9 +515,9 @@ export function createStopAllHandler(
 }
 
 /**
- * Open the focus-mode actions panel over `run`'s tool calls. The panel's log is built from the
- * run's message history and extended as the registry reports more messages, so a running run
- * streams. Resolves when the panel closes.
+ * Open the focus-mode actions panel over `run`'s tool calls, text, and thinking. The panel's log
+ * is built from the run's message history and extended as the registry reports more messages, so
+ * a running run streams. Resolves when the panel closes.
  */
 async function openActionsPanel(ctx: ExtensionContext, registry: ViewRegistry, run: Run): Promise<void> {
 	const log = new ActionLog();
@@ -525,7 +525,7 @@ async function openActionsPanel(ctx: ExtensionContext, registry: ViewRegistry, r
 	const sync = () => {
 		const current = registry.list().find((item) => item.id === run.id) ?? run;
 		if (current.messages.length > seen) {
-			log.addMessages(current.messages.slice(seen), isLive(current));
+			log.addMessages(current.messages.slice(seen), { live: isLive(current), notes: true });
 			seen = current.messages.length;
 		}
 	};

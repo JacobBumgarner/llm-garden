@@ -6,6 +6,10 @@
  * session is joined, or from another agent's message history. A group is one turn's calls, from a user message to the next, labeled with
  * the first line of that message; the transcript's hidden mode draws one counter line per group,
  * and the panel heads each group with its label.
+ *
+ * Besides tool calls, the log holds notes: the text and thinking blocks of a message, when asked
+ * for. A subagent's activity arrives through `addNested` as notes and calls under the tool call
+ * that delegated to it; the panel draws them indented and grouped after that call.
  */
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -15,6 +19,9 @@ import type { ToolItem } from "./types.ts";
 /** Lines of output kept per entry. */
 export const TAIL_LINES = 5;
 
+/** A note entry's kind: a text block or a thinking block of an assistant message. */
+export type NoteKind = "text" | "thinking";
+
 export interface ActionEntry extends ToolItem {
 	id: string;
 	group: number;
@@ -22,6 +29,8 @@ export interface ActionEntry extends ToolItem {
 	step: number;
 	/** Set when another tool made this call; it is drawn indented and left out of group counts. */
 	parentId?: string;
+	/** Set for a note, whose text is `args.text`. Notes are never running and never counted. */
+	note?: NoteKind;
 	startedAt?: number;
 	durationMs?: number;
 	/** Last lines of the result so far, or of the edit diff for an edit. */
@@ -76,13 +85,29 @@ export function tailOf(item: ToolItem): string[] {
 	return lines.slice(-TAIL_LINES);
 }
 
+/** Options for loading messages into the log. */
+export interface AddMessagesOptions {
+	/** A call without a result yet counts as started now, so its elapsed time ticks; without it such a call is one that never ran. */
+	live?: boolean;
+	/** Also record the text and thinking blocks of assistant messages as notes. */
+	notes?: boolean;
+}
+
+/** Where the entries of one message go: under a parent with ids prefixed, or at the top level. */
+interface Placement {
+	parentId?: string;
+	prefix: string;
+}
+
+const TOP_LEVEL: Placement = { prefix: "" };
+
 /** Ordered, grouped record of tool calls, with change notification for live views. */
 export class ActionLog {
 	private entries = new Map<string, ActionEntry>();
 	private order: string[] = [];
 	private listeners = new Set<LogListener>();
-	/** Tools that keep their own transcript rendering and so are left out of group counts. */
-	private excluded: Set<string>;
+	/** Tools that keep their own transcript rendering and so are left out of group counts. The panel still lists them. */
+	private uncounted: Set<string>;
 	private group = 0;
 	private step = 0;
 	private labels = new Map<number, string>();
@@ -90,9 +115,11 @@ export class ActionLog {
 	private closed = new Set<number>();
 	/** Entries changed since the last flush, delivered to listeners in one microtask. */
 	private pending = new Map<string, ActionEntry>();
+	/** Source of note ids, which have no id of their own in the message. */
+	private noteSeq = 0;
 
-	constructor(excluded: Iterable<string> = []) {
-		this.excluded = new Set(excluded);
+	constructor(uncounted: Iterable<string> = []) {
+		this.uncounted = new Set(uncounted);
 	}
 
 	/** The current group index; calls first seen now belong to it. */
@@ -105,9 +132,9 @@ export class ActionLog {
 		return this.order.map((id) => this.entries.get(id)!);
 	}
 
-	/** Entries the panel lists: everything but the tools that keep their own transcript rendering. */
+	/** Entries the panel lists: every call and note, the uncounted tools included. */
 	visible(): ActionEntry[] {
-		return this.all().filter((entry) => !this.excluded.has(entry.name));
+		return this.all();
 	}
 
 	get(id: string): ActionEntry | undefined {
@@ -166,6 +193,17 @@ export class ActionLog {
 		const entry = this.add(id, name, args, parentId);
 		entry.startedAt ??= Date.now();
 		this.notify(entry);
+	}
+
+	/** Record a note: a text or thinking block, finished on arrival. A known id is left alone. */
+	addNote(id: string, kind: NoteKind, text: string, parentId?: string): ActionEntry {
+		const existing = this.entries.get(id);
+		if (existing) return existing;
+		const entry = this.add(id, kind, { text }, parentId);
+		entry.note = kind;
+		entry.result = { text: "", details: undefined, isError: false };
+		this.notify(entry);
+		return entry;
 	}
 
 	/** Record a partial or final result; the tail follows it. */
@@ -254,38 +292,91 @@ export class ActionLog {
 	/**
 	 * Load a run of messages: each user message opens a group, the tool calls of the assistant
 	 * messages after it join it, an assistant message with text opens a step before its calls, and
-	 * tool result messages complete them. Leaves the log positioned
-	 * at the last group. With `live`, a call without a result yet counts as started now, so its
-	 * elapsed time ticks; without it such a call is one that never ran.
+	 * tool result messages complete them. Leaves the log positioned at the last group. With
+	 * `notes`, the text and thinking blocks are recorded too, in content order.
 	 */
-	addMessages(messages: unknown[], live = false): void {
+	addMessages(messages: unknown[], options: AddMessagesOptions = {}): void {
 		for (const item of messages) {
 			const message = item as { role: string } & Record<string, unknown>;
 			if (message.role === "user") {
 				this.nextGroup(labelFor(message.content));
 			} else if (message.role === "assistant") {
 				if (hasText(message.content)) this.step++;
-				const content = message.content as { type: string; id?: string; name?: string; arguments?: unknown }[];
-				for (const block of content) {
-					if (block.type !== "toolCall" || !block.id || !block.name) continue;
-					const args = (block.arguments ?? {}) as Record<string, unknown>;
-					if (live) this.start(block.id, block.name, args);
-					else this.add(block.id, block.name, args);
-				}
+				this.addAssistant(message, options, TOP_LEVEL);
 			} else if (message.role === "toolResult") {
-				const id = message.toolCallId as string;
-				if (!this.entries.has(id)) continue;
-				this.result(
-					id,
-					{ text: resultText(message.content), details: message.details, isError: message.isError === true },
-					message.durationMs as number | undefined,
-				);
+				this.addToolResult(message, TOP_LEVEL);
 			}
 		}
 	}
 
+	/**
+	 * Record one message of another agent under `parentId`, the call that delegated to it: text
+	 * and thinking blocks as notes, tool calls as running calls, and tool results completing them.
+	 * Ids are prefixed with `prefix` so two agents' calls cannot collide. Returns false, recording
+	 * nothing, when the parent is unknown.
+	 */
+	addNested(parentId: string, prefix: string, message: unknown): boolean {
+		if (!this.entries.has(parentId)) return false;
+		const item = message as { role: string } & Record<string, unknown>;
+		const placement: Placement = { parentId, prefix };
+		if (item.role === "assistant") this.addAssistant(item, { live: true, notes: true }, placement);
+		else if (item.role === "toolResult") this.addToolResult(item, placement);
+		return true;
+	}
+
+	/**
+	 * Refresh one run inside a delegating call's result details, so its row shows the run's current
+	 * state, usage, and last tool after the call itself returned. The details are copied, not
+	 * mutated, since the tool owns the originals. Returns false when the call is unknown, has no
+	 * result yet, or lists no run with that id.
+	 */
+	updateRun(callId: string, runId: string, fields: Record<string, unknown>): boolean {
+		const entry = this.entries.get(callId);
+		if (!entry?.result) return false;
+		const details = entry.result.details;
+		if (!details || typeof details !== "object") return false;
+		const runs = (details as { runs?: unknown }).runs;
+		if (!Array.isArray(runs)) return false;
+		const index = runs.findIndex((run) => run && typeof run === "object" && (run as { sessionId?: unknown }).sessionId === runId);
+		if (index === -1) return false;
+		const next = [...runs];
+		next[index] = { ...(runs[index] as Record<string, unknown>), ...fields };
+		entry.result = { ...entry.result, details: { ...(details as Record<string, unknown>), runs: next } };
+		this.notify(entry);
+		return true;
+	}
+
+	/** Record an assistant message's blocks in content order: calls always, text and thinking when `notes` is set. */
+	private addAssistant(message: Record<string, unknown>, options: AddMessagesOptions, placement: Placement): void {
+		const content = message.content as { type: string; id?: string; name?: string; arguments?: unknown; text?: unknown; thinking?: unknown }[];
+		if (!Array.isArray(content)) return;
+		const { parentId, prefix } = placement;
+		for (const block of content) {
+			if (block.type === "toolCall" && block.id && block.name) {
+				const args = (block.arguments ?? {}) as Record<string, unknown>;
+				if (options.live) this.start(prefix + block.id, block.name, args, parentId);
+				else this.add(prefix + block.id, block.name, args, parentId);
+			} else if (options.notes && (block.type === "text" || block.type === "thinking")) {
+				const text = block.type === "text" ? block.text : block.thinking;
+				if (typeof text !== "string" || text.trim() === "") continue;
+				this.addNote(`note:${this.noteSeq++}`, block.type, text, parentId);
+			}
+		}
+	}
+
+	/** Complete the call a tool result answers, if the log knows it. */
+	private addToolResult(message: Record<string, unknown>, placement: Placement): void {
+		const id = placement.prefix + (message.toolCallId as string);
+		if (!this.entries.has(id)) return;
+		this.result(
+			id,
+			{ text: resultText(message.content), details: message.details, isError: message.isError === true },
+			message.durationMs as number | undefined,
+		);
+	}
+
 	private counts(entry: ActionEntry): boolean {
-		return entry.parentId === undefined && !this.excluded.has(entry.name);
+		return entry.parentId === undefined && entry.note === undefined && !this.uncounted.has(entry.name);
 	}
 
 	/**

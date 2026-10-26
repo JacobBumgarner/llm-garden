@@ -124,14 +124,67 @@ describe("ActionLog", () => {
 		assert.equal(log.isGroupTail("b"), true);
 	});
 
-	it("hides excluded tools from the panel listing", () => {
+	it("lists uncounted tools in the panel but leaves them out of the counts", () => {
 		const log = new ActionLog(["subagent"]);
+		log.nextGroup();
 		log.add("s", "subagent", {});
 		log.add("a", "read", {});
 		assert.deepEqual(
 			log.visible().map((entry) => entry.id),
-			["a"],
+			["s", "a"],
 		);
+		assert.equal(log.groupCount(1).total, 1);
+	});
+
+	it("nests another agent's messages under the delegating call as notes and calls", () => {
+		const log = new ActionLog(["subagent"]);
+		log.nextGroup();
+		log.start("s", "subagent", { action: "start" });
+		const added = log.addNested("s", "run1:", {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "let me look" },
+				{ type: "text", text: "Reading the file." },
+				{ type: "toolCall", id: "c1", name: "read", arguments: { path: "f.ts" } },
+			],
+		});
+		assert.equal(added, true);
+		const nested = log.visible().filter((entry) => entry.parentId === "s");
+		assert.deepEqual(
+			nested.map((entry) => [entry.note ?? entry.name, entry.id]),
+			[
+				["thinking", "note:0"],
+				["text", "note:1"],
+				["read", "run1:c1"],
+			],
+		);
+		assert.ok(log.get("run1:c1")?.startedAt !== undefined, "nested calls tick");
+		assert.equal(log.get("note:0")?.result !== undefined, true, "notes never run");
+		log.addNested("s", "run1:", { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "ok" }], isError: false });
+		assert.ok(log.get("run1:c1")?.durationMs !== undefined);
+		assert.equal(log.groupCount(1).total, 0, "neither the subagent call nor its nested work counts");
+	});
+
+	it("refreshes a run inside a call's result details without touching the original", () => {
+		const log = new ActionLog(["subagent"]);
+		const details = { action: "start", view: "started", runs: [{ sessionId: "r1", state: "running", usage: { turns: 0 } }] };
+		log.start("s", "subagent", { action: "start" });
+		assert.equal(log.updateRun("s", "r1", { state: "done" }), false, "no result yet");
+		log.result("s", { text: "", details, isError: false });
+		assert.equal(log.updateRun("s", "zz", { state: "done" }), false, "unknown run");
+		assert.equal(log.updateRun("s", "r1", { state: "done", usage: { turns: 3 } }), true);
+		const runs = (log.get("s")?.result?.details as { runs: Record<string, unknown>[] }).runs;
+		assert.deepEqual(runs[0], { sessionId: "r1", state: "done", usage: { turns: 3 } });
+		assert.equal(details.runs[0].state, "running", "the tool's own details are left alone");
+	});
+
+	it("drops nested messages whose parent is unknown and skips blank blocks", () => {
+		const log = new ActionLog();
+		assert.equal(log.addNested("missing", "r:", { role: "assistant", content: [{ type: "text", text: "x" }] }), false);
+		assert.deepEqual(log.visible(), []);
+		log.add("s", "subagent", {});
+		log.addNested("s", "r:", { role: "assistant", content: [{ type: "text", text: "  \n" }] });
+		assert.equal(log.visible().length, 1);
 	});
 
 	it("records duration once on the final result and keeps partial tails", () => {
@@ -166,14 +219,30 @@ describe("ActionLog", () => {
 		log.addMessages(
 			[
 				{ role: "user", content: "do it" },
-				{ role: "assistant", content: [{ type: "toolCall", id: "a", name: "bash", arguments: { command: "ls" } }] },
+				{ role: "assistant", content: [{ type: "text", text: "Listing." }, { type: "toolCall", id: "a", name: "bash", arguments: { command: "ls" } }] },
 			],
-			true,
+			{ live: true },
 		);
 		assert.ok(log.get("a")?.startedAt !== undefined);
 		assert.equal(log.label(1), "do it");
-		log.addMessages([{ role: "toolResult", toolCallId: "a", toolName: "bash", content: [{ type: "text", text: "ok" }], isError: false }], true);
+		assert.equal(log.visible().length, 1, "text is not recorded unless notes are asked for");
+		log.addMessages([{ role: "toolResult", toolCallId: "a", toolName: "bash", content: [{ type: "text", text: "ok" }], isError: false }], { live: true });
 		assert.ok(log.get("a")?.durationMs !== undefined);
+	});
+
+	it("records text and thinking as notes when asked", () => {
+		const log = new ActionLog();
+		log.addMessages(
+			[{ role: "assistant", content: [{ type: "thinking", thinking: "hm" }, { type: "text", text: "Done." }] }],
+			{ notes: true },
+		);
+		assert.deepEqual(
+			log.visible().map((entry) => [entry.note, entry.args.text]),
+			[
+				["thinking", "hm"],
+				["text", "Done."],
+			],
+		);
 	});
 
 	it("seeds from a session branch", () => {

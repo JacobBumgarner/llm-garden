@@ -5,7 +5,10 @@
  * Each entry is its full summary behind a status glyph, a duration once finished, and the capped
  * tail of its output in muted text. A bash command is broken one pipeline step per line by
  * `splitShell`, and every line wider than the panel soft-wraps with a hanging indent, so nothing
- * needs sideways scrolling. Nested calls are indented under their parent; every turn opens
+ * needs sideways scrolling. Nested calls and notes are indented under their parent and drawn
+ * right after it, whatever order they arrived in. A note is a text or thinking block of a
+ * subagent: a thinking note shows its first line, a text note its first few lines, and either
+ * says how many lines it left out. Every turn opens
  * with a header line carrying the first line of the user message that started it, painted in the
  * transcript's user-message colors, and a turn without calls says so under its header. Within a
  * turn, a dashed rule separates steps: the runs of calls the agent made between pieces of text.
@@ -33,7 +36,7 @@ import {
 import { CopyFeedback } from "../../shared/copy-feedback.ts";
 import { cellAt, DragAutoScroll, highlightSelection, type PaintedText, TextSelection } from "../../shared/selection.ts";
 import { Viewport } from "../../shared/viewport.ts";
-import type { ActionEntry } from "./log.ts";
+import type { ActionEntry, NoteKind } from "./log.ts";
 import { durationLabel, stripColor } from "./strip.ts";
 import { summarize } from "./summarize.ts";
 
@@ -42,6 +45,10 @@ const RUNNING = "○ ";
 const ERROR_SUFFIX = " error";
 const NESTED_INDENT = "  ";
 const TAIL_PREFIX = "│ ";
+/** Glyphs for notes: a quotation mark for text, a fold marker for thinking, as the transcript's collapsed-thinking label. */
+const NOTE_GLYPH: Record<NoteKind, string> = { text: "“ ", thinking: "▸ " };
+/** Non-blank lines shown of a note by kind. */
+const NOTE_LINES: Record<NoteKind, number> = { text: 5, thinking: 1 };
 const NO_ACTIONS = "(no actions)";
 /** Drawn between the steps of a turn. */
 const STEP_RULE = "┈┈┈┈┈┈┈┈";
@@ -102,8 +109,27 @@ export function wrapRow(prefix: string, text: string, width: number | undefined)
 	return rows.map((row, i) => (i === 0 ? prefix : hang) + row);
 }
 
-/** Styled lines for one entry: summary lines, then the tail, each wrapped to `width` when given. */
+/**
+ * Styled lines for a note: its first non-blank lines behind the kind's glyph, thinking cut to one
+ * and text to a few, then a dim count of the lines left out. Thinking is dim throughout, text muted.
+ */
+function noteLines(entry: ActionEntry, kind: NoteKind, style: PanelStyle, width?: number): string[] {
+	const indent = entry.parentId === undefined ? "" : NESTED_INDENT;
+	const text = typeof entry.args.text === "string" ? entry.args.text : "";
+	const all = text.split("\n").filter((line) => line.trim() !== "");
+	const shown = all.slice(0, NOTE_LINES[kind]);
+	const color = kind === "thinking" ? "dim" : "muted";
+	const glyph = NOTE_GLYPH[kind];
+	const hang = indent + " ".repeat(glyph.length);
+	const lines = shown.flatMap((line, i) => wrapRow(i === 0 ? indent + style.fg("dim", glyph) : hang, style.fg(color, line.trim()), width));
+	const hidden = all.length - shown.length;
+	if (hidden > 0) lines.push(hang + style.fg("dim", `… ${hidden} more line${hidden === 1 ? "" : "s"}`));
+	return lines;
+}
+
+/** Styled lines for one entry: summary lines, then the tail, each wrapped to `width` when given. A note takes its own shape. */
 export function entryLines(entry: ActionEntry, style: PanelStyle, now = Date.now(), width?: number): string[] {
+	if (entry.note) return noteLines(entry, entry.note, style, width);
 	const color = stripColor(entry);
 	const indent = entry.parentId === undefined ? "" : NESTED_INDENT;
 	const glyph = color === "muted" ? RUNNING : DONE;
@@ -151,8 +177,10 @@ export function groupHeader(label: string, width: number, style: PanelStyle): st
  * The scrollable body: every group in order, each opened by a header `width` wide carrying its
  * label and followed by its entries' lines wrapped to `width`, or a dim "(no actions)" when it has
  * none; a blank line separates groups, and a dim dashed rule separates the steps within one.
- * Entries whose group is not listed are grouped on their own. Also reports the first line of each
- * step and group.
+ * Nested entries are drawn after their parent in their own order, so a subagent's work stays
+ * under the call that delegated it while the orchestrator's later calls follow. A nested entry
+ * whose parent is not listed is drawn where it arrived. Entries whose group is not listed are
+ * grouped on their own. Also reports the first line of each step and group.
  */
 export function bodyLayout(
 	groups: number[],
@@ -163,7 +191,7 @@ export function bodyLayout(
 	now = Date.now(),
 ): BodyLayout {
 	const byGroup = new Map<number, ActionEntry[]>();
-	for (const entry of entries.slice(-MAX_ENTRIES)) {
+	for (const entry of nestUnderParents(entries.slice(-MAX_ENTRIES))) {
 		const list = byGroup.get(entry.group);
 		if (list) list.push(entry);
 		else byGroup.set(entry.group, [entry]);
@@ -192,6 +220,29 @@ export function bodyLayout(
 		}
 	});
 	return { lines, stepAt, groupAt };
+}
+
+/** Reorder entries so each nested entry follows its parent, keeping the order among siblings and among top-level entries. Orphans stay put. */
+export function nestUnderParents(entries: ActionEntry[]): ActionEntry[] {
+	const ids = new Set(entries.map((entry) => entry.id));
+	const children = new Map<string, ActionEntry[]>();
+	for (const entry of entries) {
+		if (entry.parentId === undefined || !ids.has(entry.parentId)) continue;
+		const list = children.get(entry.parentId);
+		if (list) list.push(entry);
+		else children.set(entry.parentId, [entry]);
+	}
+	if (children.size === 0) return entries;
+	const ordered: ActionEntry[] = [];
+	const place = (entry: ActionEntry) => {
+		ordered.push(entry);
+		for (const child of children.get(entry.id) ?? []) place(child);
+	};
+	for (const entry of entries) {
+		if (entry.parentId !== undefined && ids.has(entry.parentId)) continue;
+		place(entry);
+	}
+	return ordered;
 }
 
 /** The lines of `bodyLayout`. */

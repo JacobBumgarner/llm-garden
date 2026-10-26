@@ -57,6 +57,16 @@ describe("entryLines", () => {
 		assert.deepEqual(entryLines(nested, style), ["  ○ … read f"]);
 	});
 
+	it("draws a thinking note as its first line and a text note as its first lines, each counting the rest", () => {
+		const done = { text: "", details: undefined, isError: false };
+		const thinking = entry({ id: "n1", name: "thinking", note: "thinking", args: { text: "first\n\nsecond\nthird" }, parentId: "a", result: done });
+		assert.deepEqual(entryLines(thinking, style), ["  ▸ first", "    … 2 more lines"]);
+		const text = entry({ id: "n2", name: "text", note: "text", args: { text: "one\ntwo" }, parentId: "a", result: done });
+		assert.deepEqual(entryLines(text, style), ["  “ one", "    two"]);
+		const long = entry({ id: "n3", name: "text", note: "text", args: { text: Array.from({ length: 7 }, (_, i) => `l${i}`).join("\n") }, result: done });
+		assert.deepEqual(entryLines(long, style), ["“ l0", "  l1", "  l2", "  l3", "  l4", "  … 2 more lines"]);
+	});
+
 	it("breaks a chained bash command one step per line, continuation under the command", () => {
 		const done = entry({
 			id: "a",
@@ -126,6 +136,21 @@ describe("bodyLines", () => {
 			(group) => labels[group] ?? "",
 		);
 		assert.deepEqual(lines, [" first ask          ", "○ … read", "○ … read", "", " second ask         ", "○ … read"]);
+	});
+
+	it("draws nested entries after their parent, ahead of later top-level calls", () => {
+		const lines = bodyLines(
+			[1],
+			[
+				entry({ id: "s", name: "subagent", args: { action: "start", agent: "scout", label: "Look" } }),
+				entry({ id: "b", name: "bash", args: { command: "ls" } }),
+				entry({ id: "s:1", name: "read", args: { path: "f" }, parentId: "s" }),
+				entry({ id: "o", name: "read", args: { path: "orphan" }, parentId: "gone" }),
+			],
+			40,
+			style,
+		);
+		assert.deepEqual(lines, [" ".repeat(40), "○ … subagent scout · Look", "  ○ … read f", "○ … $ ls", "  ○ … read orphan"]);
 	});
 
 	it("lists a turn without calls under its header, and groups unlisted entries on their own", () => {
