@@ -1,6 +1,6 @@
 ---
 name: orchestration/editor
-description: Reorder and split prose so each paragraph leads with its point, never changing facts. Used by orchestrate and commit-flow before the user reads.
+description: Reorder and split prose so each paragraph leads with its point, never changing facts. Used by orchestrate before the user reads.
 ---
 
 # Editor pass

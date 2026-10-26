@@ -11,6 +11,6 @@ Each file starts with frontmatter holding `name` and `description`. The
 description is what the tool shows the calling agent, so it says what the job
 is and which skill uses it.
 
-`orchestration/` holds the briefs the `orchestrate` and `commit-flow` skills
+`orchestration/` holds the briefs the `orchestrate` and `code-review` skills
 send. They are not for general use: each assumes the plan file layout and the
 scratch directory those skills define.

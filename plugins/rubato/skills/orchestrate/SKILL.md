@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Run a phased software development workflow in which the user sets direction in short sessions while the orchestrator and its delegates design, build, and verify in the background. Q&A in cycles with recon and a critic, a plan grilled before the user sees it, a design review held as a conversation, a staged build where each stage is one commit, and a demo that hands off to the commit-flow skill. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Invoke with the argument `implement` after compaction to build the approved plan.
+description: Run a phased software development workflow in which the user sets direction in short sessions while the orchestrator and its delegates design, build, and verify in the background. Q&A in cycles with recon and a critic, a plan grilled before the user sees it, a design review held as a conversation, a staged build where each stage is one commit, and a demo that hands off to the code-review skill. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Invoke with the argument `implement` after compaction to build the approved plan.
 ---
 
 # Orchestrate
@@ -27,7 +27,7 @@ tracks them.
 4. **Design review.** Session, then the fresh-reader check in background.
    Ends at approval, then compaction.
 5. **Build.** Background.
-6. **Demo.** Background, then session. Hands off to `commit-flow`.
+6. **Demo.** Background, then session. Hands off to `code-review organize`.
 
 The skill is invoked without any arguments. The skill starts at Request, or
 resumes a plan in `plan/` whose `step:` line matches the request. Invoked with
@@ -48,7 +48,7 @@ version they belong to.
 ````
 # {plan-name}
 step: N name  |  merged
-base: the commit the branch left from
+base: the commit each stage group left from, with its group, such as `bf208cb (g1)`
 
 ## Problem
 agent drafts, user rewrites in their own words
@@ -73,6 +73,7 @@ interfaces and schemas, invariants, files per stage
 ## Stages
 - Stage 1: title. verify phrase  [pending]
 - Stage 2: title. verify phrase  (independent of 1)  [pending]
+- Stage 3: title (user). deploys the code  (group 1 ends)  [pending]
 
 ### Stage 1: title
 - Status: pending
@@ -152,6 +153,20 @@ stage collapses to its title, `Status: dropped`, and `Outcome: superseded by
 N`. Only the orchestrator writes Status and Outcome, and whenever it changes a
 Status it changes the matching index line in the same edit.
 
+**Stage groups.** A user stage whose `Do` deploys code anywhere, such as to
+CATS or to a config repo, ends a stage group. The group holds the stages
+before it, back to the previous deploy stage or the start, plus the deploy
+stage itself as its last stage. The group is organized, reviewed, and merged
+before the deploy stage runs. Stages that depend on the deploy stay `blocked`
+until the user reports it done. A plan with no deploy stage is one group. The
+Stages index marks the boundary on the deploy stage's own line, which ends
+`(group 1 ends)` before its Status. The `base:` line holds one entry per
+group, `base: bf208cb (g1)`, then `base: bf208cb (g1), 4e1a9c0 (g2)` once
+group 2 starts. Group 1 builds on the branch `{plan-name}`. Each later group
+builds on `{plan-name}-g{N}` under the same prefix convention, from `main`
+after the previous group merged. A worktree, if one is used, takes the same
+suffix.
+
 **Review record.** The ledger below the fold. Under User: the Q&A sessions
 and the design conversation, question and answer, with an open question marked
 `(open)` until it is answered. Under Delegates: critic questions with their
@@ -167,7 +182,7 @@ It has no Design, no Stages, and no Review record. It is never built from. Each
 **spoke** is `plan/{hub-name}-{nn}-{spoke-name}.md`, a complete plan of this
 template with its own Problem, written from the hub's Problem and the spoke's
 line. Each spoke runs this skill on its own: its own Q&A, design review, build,
-branch, and commit pass. A spoke's Problem names its hub in its first line. The
+branch, and review. A spoke's Problem names its hub in its first line. The
 hub is created at Checkpoint 1 when the split is agreed, with the spoke list in
 the order they are built. When a spoke is merged, its line in the hub reads
 `merged`. When every spoke is merged, the hub moves to
@@ -185,7 +200,7 @@ another spoke must honor is copied up to the hub's Decisions at that moment.
   to `.gitignore`.
 - The plan file stays uncommitted until the demo is done. It changes through
   every phase, and a committed copy would be stale by the next stage. It is
-  committed once, by the user, as the last commit of the commit-flow pass.
+  committed once, by the user, as the last commit, after the final fold.
 
 ## Running the phases
 
@@ -221,7 +236,7 @@ repo has none of the gates named under Build, ask in the same round whether
 stage 1 adds them or this plan skips them.
 
 On just do it, there is no plan file. Do the work in this session, commit
-under the Commits form, and offer `commit-flow` at Handover when done.
+under the Commits form, and offer `code-review organize` when done.
 
 On plan, create the branch `{plan-name}` under the repo's prefix convention if
 it has one, such as `feat/`, and check it out in the repo's own checkout. No
@@ -349,9 +364,12 @@ decided at Checkpoint 1 whether stage 1 adds them. Gate results are one line in
 the Outcome.
 
 **Commits.** Each stage ends in one commit on the plan's branch. The form
-below is copied in the `orchestration/implementer` and
-`orchestration/reviewer` briefs, and the copies must match this one. The title
-carries the stage and says what the change does, under about 60 characters:
+below is copied in the `orchestration/implementer`,
+`orchestration/reviewer`, and `orchestration/organizer` briefs, and the copies
+must match this one. Stage commits carry `[sN]`. The semantic series that
+`code-review` builds from them carries `[cN]`, numbered in series order. The
+title carries the stage and says what the change does, under about 60
+characters:
 `[s2] client: ask the server for its minimum client version`.
 
 The body has two parts separated by a line holding only `---`. Above it, the
@@ -391,10 +409,11 @@ The tool can now find out if it is too old for the server.
 A cleanup commit has the same form. Within a stage, before Record, the
 reviewer folds its fixups into the stage commit and rewrites the message under
 this form, so each stage is one commit. After Record, no commit is touched. A
-fix after the user's review is a new commit titled with the stage it fixes.
-Nothing is pushed. These commits are the agent's record, and the user rewrites
-them later. The plan file is never part of a stage commit, and it is not
-committed on its own either until the demo is done.
+fix after the user's review is a new commit titled `[cN] fix: what it does`,
+where `cN` is the series commit it belongs to. Nothing is pushed. The stage
+commits are the agent's record, and the organizer rewrites them into the
+series at the end of the group. The plan file is never part of a stage
+commit, and it is not committed on its own either until the demo is done.
 
 **Cleanup bar.** Copied in the `orchestration/reviewer` brief, and the copy
 must match this one. On top of the repo's conventions and gates:
@@ -411,6 +430,32 @@ must match this one. On top of the repo's conventions and gates:
 - Naming follows the language's convention and the repo's existing style.
 - No dead code, no leftover scratch, no logic duplicated across stages.
 
+**End of a group.** When the last stage of a group is recorded, the
+orchestrator follows the Organize steps of the `code-review` skill. It runs
+`list`, applies the size guard, and sends the organizer and then the series
+reviewer. It writes the old-to-new map into the Review record under
+Delegates, and tells the user: `Series ready on {branch}: [c1]..[cN]. Read in
+tuicr, then /code-review in a fresh session.` Then it waits. The user
+comes back with a review file, or with the word that the series is approved
+as it stands.
+
+**Fix stages and fold.** When the user approves the series as it stands, or
+the review file holds no `fix` entry, there is nothing to build or fold, and
+the orchestrator records any `answered` or `declined` outcomes and moves on
+to the merge. Otherwise the user returns with the review file,
+`plan/scratch/{plan-name}/review-{g}.md`, where `{g}` is the group number.
+The orchestrator adds one fix stage per `fix` entry to the Stages index and
+blocks, inside the group, titled `Fix for [cN]: what it does`, with Status and
+Outcome like any stage. Each builds through the implementer and reviewer as
+usual, with the commit title `[cN] fix: ...`. The orchestrator then sends the
+organizer with the task `fold`. It writes each comment's outcome into the
+Review record under User: the comment, the decision, and the commit that
+carries the fix. The user then rewords in `lazygit`, pushes, and merges. The
+orchestrator pushes only when the user says to. When the user reports the
+merge, the deploy stage that ended the group runs, and the next group starts
+on its own branch. Stages that depend on the deploy stay `blocked` until the
+user reports it done.
+
 ### Demo
 
 First, in background. Rewrite Overview from the built code and the current
@@ -425,10 +470,10 @@ last criterion, list divergences, one line each with the Decision that moved,
 and the open items in the Review record. A finding that needs more work becomes
 a follow-up plan or a spoke, never more stages.
 
-Then invoke `commit-flow` at its first stage, Handover. That skill owns the
-user's pass: review in `tuicr`, squash and reword in `lazygit`, the read-back,
-and the push. Nothing leaves the machine before it. The plan file is committed
-there, by the user, as the last commit on the branch.
+Then hand off to `code-review organize` for the final group, which follows
+End of a group above. The user reads in `tuicr`, reviews in a fresh session,
+and rewords in `lazygit`. Nothing leaves the machine before the user pushes.
+The plan file is committed by the user, last and alone, after the fold.
 
 When the commits are merged, set `step: merged`, move the plan to
 `plan/archive/unreleased/`, delete `plan/scratch/{plan-name}/`, and update
@@ -484,7 +529,8 @@ instructions are a brief, one per job, which the subagent tool appends to the
 delegate's system prompt when the `brief` field names it. The briefs for this
 skill are `orchestration/recon`, `orchestration/critic`,
 `orchestration/fresh-reader`, `orchestration/implementer`,
-`orchestration/reviewer`, `orchestration/editor`, and `orchestration/proofing`.
+`orchestration/reviewer`, `orchestration/editor`, `orchestration/organizer`,
+and `orchestration/series-reviewer`.
 The tool lists them. The task is then only the inputs, one per line, every
 path absolute. Repo facts such as how to run tests, which runner to use, and
 code style are not inputs: every brief says to read the repo's `AGENTS.md`,
@@ -541,9 +587,9 @@ type checking".
 
 **Editor pass.** Before the user reads a plan file, a fresh mid-tier delegate
 edits it for reading. Its brief is `orchestration/editor`. The task you give
-it is one line: the file path and the sections. When it returns, read the diff of the plan file and revert any line
-where a fact changed and not only its phrasing. Anything the delegate lists
-under possible fact issues, you resolve. The pass runs after Plan step 5,
-after the Demo rewrite of Overview, and on the Handover blocks in
-`commit-flow`. Run it on the context block of any question with more than a
+it is one line: the file path and the sections. When it returns, read the
+diff of the plan file and revert any line where a fact changed and not only
+its phrasing. Anything the delegate lists under possible fact issues, you
+resolve. The pass runs after Plan step 5 and after the Demo rewrite of
+Overview. Run it on the context block of any question with more than a
 paragraph of context.

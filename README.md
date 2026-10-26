@@ -10,7 +10,7 @@ and install into both Claude Code and pi.
 | Plugin | Skill | Details |
 | --- | --- | --- |
 | `rubato` | `orchestrate` | A phased workflow where agents design and build while the user reviews at fixed checkpoints, acting as tech lead rather than author. Four phases: discovery (Q&A and recon), whiteboard (iterated design, presented as a pitch and the questions it survived), plan (staged into ordered, verifiable units), and build (implement, review, cleanup, and a final report against what was approved). |
-| `rubato` | `commit-flow` | Reviews the working-tree diffs and proposes a group of logical commits with descriptions. Designed to ensure LLM code organization is tracked by a human. |
+| `rubato` | `code-review` | Rewrites a branch of agent stage commits into a series of semantic commits a person can read, checks that the final code is unchanged, then takes the user's `tuicr` review and records what to fix. |
 
 ## pi extensions
 

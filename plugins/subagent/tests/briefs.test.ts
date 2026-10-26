@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { BUNDLED_BRIEFS_DIR, describeBriefs, discoverBriefs } from "../extensions/briefs.ts";
 
-const ORCHESTRATION = ["critic", "editor", "fresh-reader", "implementer", "proofing", "recon", "reviewer"].map((n) => `orchestration/${n}`);
+const ORCHESTRATION = ["critic", "editor", "fresh-reader", "implementer", "organizer", "recon", "reviewer", "series-reviewer"].map((n) => `orchestration/${n}`);
 
 test("the bundled orchestration briefs are discovered by group/name with their files", () => {
 	const briefs = discoverBriefs(path.join(os.tmpdir(), "no-such-briefs-dir"));
