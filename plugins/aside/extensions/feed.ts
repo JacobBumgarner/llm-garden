@@ -5,6 +5,15 @@ export const TOOL_RESULT_CAP = 300;
 const ARG_CAP = 200;
 const TRUNCATED_MARK = "... [truncated]";
 const FALLBACK_NOTE = "[Note: the last feed position is not on this branch, so the whole branch is sent again.]";
+const TRANSCRIPT_OPEN = "<main-transcript>";
+const TRANSCRIPT_CLOSE = "</main-transcript>";
+
+/** Drop the transcript block the extension prepends to a question. */
+export function stripTranscript(text: string): string {
+	if (!text.startsWith(TRANSCRIPT_OPEN)) return text;
+	const end = text.indexOf(TRANSCRIPT_CLOSE);
+	return end < 0 ? text : text.slice(end + TRANSCRIPT_CLOSE.length).replace(/^\s+/, "");
+}
 
 /** One session entry as the feed reads it. Fields the feed does not use are ignored. */
 export interface FeedEntry {
@@ -109,10 +118,24 @@ export function buildFeed(branch: readonly FeedEntry[], cursor: string | undefin
 	return { text: blocks.join("\n\n"), cursor: last };
 }
 
-/** The sidecar for a main session: which aside session is current, and how far the feed has gone in it. */
+/**
+ * The sidecar for a main session: which aside session is current, how far the feed has gone in it,
+ * and where the feed stood in each aside session switched away from, keyed by aside session id.
+ */
 export interface Meta {
 	session?: string;
 	cursor?: string;
+	cursors?: Record<string, string>;
+}
+
+/** The sidecar after moving from aside session `current` to `next`: the current cursor is parked under `current`, and `next` picks up its parked cursor, if any. */
+export function switchSession(meta: Meta, current: string, next: string): Meta {
+	const cursors = { ...meta.cursors };
+	if (meta.cursor) cursors[current] = meta.cursor;
+	else delete cursors[current];
+	const cursor = cursors[next];
+	delete cursors[next];
+	return { session: next, cursor, ...(Object.keys(cursors).length > 0 ? { cursors } : {}) };
 }
 
 function metaPath(dir: string, mainSessionId: string): string {
@@ -124,21 +147,34 @@ export function asideSessionId(mainSessionId: string, n = 1): string {
 	return n <= 1 ? `aside-${mainSessionId}` : `aside-${mainSessionId}-${n}`;
 }
 
-/** The session id that follows `current`, which is the first id or one ending in `-{n}`. */
-export function nextSessionId(mainSessionId: string, current: string): string {
+/** The number of an aside session id for a main session, or undefined when the id belongs to another main session or is malformed. */
+export function asideSessionNumber(mainSessionId: string, id: string): number | undefined {
 	const first = asideSessionId(mainSessionId);
-	if (current === first) return asideSessionId(mainSessionId, 2);
-	const n = Number(current.slice(first.length + 1));
-	return asideSessionId(mainSessionId, Number.isInteger(n) && n >= 2 ? n + 1 : 2);
+	if (id === first) return 1;
+	if (!id.startsWith(`${first}-`)) return undefined;
+	const n = Number(id.slice(first.length + 1));
+	return Number.isInteger(n) && n >= 2 ? n : undefined;
+}
+
+/** The aside session id after every id in `known`: one past the highest number, or `-2` when only malformed ids are known. */
+export function nextSessionId(mainSessionId: string, known: Iterable<string>): string {
+	let max = 1;
+	for (const id of known) max = Math.max(max, asideSessionNumber(mainSessionId, id) ?? 1);
+	return asideSessionId(mainSessionId, max + 1);
 }
 
 /** Read the sidecar for a main session. A missing or unreadable file reads as empty. */
 export function readMeta(dir: string, mainSessionId: string): Meta {
 	try {
-		const parsed = JSON.parse(fs.readFileSync(metaPath(dir, mainSessionId), "utf-8")) as { session?: unknown; cursor?: unknown };
+		const parsed = JSON.parse(fs.readFileSync(metaPath(dir, mainSessionId), "utf-8")) as { session?: unknown; cursor?: unknown; cursors?: unknown };
+		const cursors: Record<string, string> = {};
+		if (parsed.cursors && typeof parsed.cursors === "object") {
+			for (const [id, cursor] of Object.entries(parsed.cursors)) if (typeof cursor === "string") cursors[id] = cursor;
+		}
 		return {
 			session: typeof parsed.session === "string" ? parsed.session : undefined,
 			cursor: typeof parsed.cursor === "string" ? parsed.cursor : undefined,
+			...(Object.keys(cursors).length > 0 ? { cursors } : {}),
 		};
 	} catch {
 		return {};

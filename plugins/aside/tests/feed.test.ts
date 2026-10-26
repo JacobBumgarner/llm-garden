@@ -9,6 +9,9 @@ import {
 	nextSessionId,
 	readMeta,
 	asideSessionId,
+	asideSessionNumber,
+	stripTranscript,
+	switchSession,
 	TOOL_RESULT_CAP,
 	writeMeta,
 } from "../extensions/feed.ts";
@@ -127,10 +130,39 @@ test("compaction entry is skipped and raw history before it is kept", () => {
 
 test("session ids count from aside-{id} and then aside-{id}-{n}", () => {
 	assert.equal(asideSessionId("abc"), "aside-abc");
-	assert.equal(nextSessionId("abc", "aside-abc"), "aside-abc-2");
-	assert.equal(nextSessionId("abc", "aside-abc-2"), "aside-abc-3");
-	assert.equal(nextSessionId("abc", "aside-abc-9"), "aside-abc-10");
-	assert.equal(nextSessionId("abc", "junk"), "aside-abc-2");
+	assert.equal(nextSessionId("abc", ["aside-abc"]), "aside-abc-2");
+	assert.equal(nextSessionId("abc", ["aside-abc-2"]), "aside-abc-3");
+	assert.equal(nextSessionId("abc", ["aside-abc-9"]), "aside-abc-10");
+	assert.equal(nextSessionId("abc", ["junk"]), "aside-abc-2");
+	assert.equal(nextSessionId("abc", []), "aside-abc-2");
+});
+
+test("next session id goes past every known aside, so resuming an older one and starting new does not collide", () => {
+	assert.equal(nextSessionId("abc", ["aside-abc", "aside-abc-3", "aside-abc-2", "aside-xyz-7"]), "aside-abc-4");
+});
+
+test("aside session numbers parse only this main session's ids", () => {
+	assert.equal(asideSessionNumber("abc", "aside-abc"), 1);
+	assert.equal(asideSessionNumber("abc", "aside-abc-2"), 2);
+	assert.equal(asideSessionNumber("abc", "aside-abc-12"), 12);
+	assert.equal(asideSessionNumber("abc", "aside-abc-1"), undefined);
+	assert.equal(asideSessionNumber("abc", "aside-abc-x"), undefined);
+	assert.equal(asideSessionNumber("abc", "aside-abcd"), undefined);
+	assert.equal(asideSessionNumber("abc", "aside-xyz"), undefined);
+});
+
+test("switching parks the cursor under the old session and restores the next session's parked cursor", () => {
+	const a = switchSession({ session: "aside-abc", cursor: "c1" }, "aside-abc", "aside-abc-2");
+	assert.deepEqual(a, { session: "aside-abc-2", cursor: undefined, cursors: { "aside-abc": "c1" } });
+	const b = switchSession({ ...a, cursor: "c2" }, "aside-abc-2", "aside-abc");
+	assert.deepEqual(b, { session: "aside-abc", cursor: "c1", cursors: { "aside-abc-2": "c2" } });
+	const c = switchSession({ session: "aside-abc" }, "aside-abc", "aside-abc-3");
+	assert.deepEqual(c, { session: "aside-abc-3", cursor: undefined });
+});
+
+test("stripTranscript drops the prepended transcript block", () => {
+	assert.equal(stripTranscript("<main-transcript>\nstuff\n</main-transcript>\n\nhello"), "hello");
+	assert.equal(stripTranscript("hello"), "hello");
 });
 
 test("sidecar round trips with and without a session field and a missing file reads as empty", () => {
@@ -144,6 +176,8 @@ test("sidecar round trips with and without a session field and a missing file re
 		assert.deepEqual(readMeta(dir, "abc"), { session: "aside-abc-2", cursor: undefined });
 		writeMeta(dir, "abc", { session: "aside-abc-2", cursor: "e1" });
 		assert.deepEqual(readMeta(dir, "abc"), { session: "aside-abc-2", cursor: "e1" });
+		writeMeta(dir, "abc", { session: "aside-abc-2", cursor: "e1", cursors: { "aside-abc": "e0" } });
+		assert.deepEqual(readMeta(dir, "abc"), { session: "aside-abc-2", cursor: "e1", cursors: { "aside-abc": "e0" } });
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

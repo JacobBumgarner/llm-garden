@@ -2,12 +2,34 @@
 
 import * as path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { type ExtensionAPI, type ExtensionContext, getAgentDir, type Theme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, getAgentDir, SessionManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { AsideChild } from "./child.ts";
 import { type OverlayHost, OverlaySlot } from "../../shared/overlay.ts";
 import { modelAlias } from "../../shared/model-alias.ts";
-import { buildFeed, type FeedEntry, type Meta, nextSessionId, readMeta, asideSessionId, writeMeta } from "./feed.ts";
-import { OVERLAY_OPTIONS, type PanelBackend, type PanelEvent, type PanelListener, AsidePanel, TOGGLE_KEY } from "./panel.ts";
+import {
+	asideSessionId,
+	asideSessionNumber,
+	buildFeed,
+	type FeedEntry,
+	type Meta,
+	nextSessionId,
+	readMeta,
+	stripTranscript,
+	switchSession,
+	writeMeta,
+} from "./feed.ts";
+import {
+	OVERLAY_OPTIONS,
+	type ModelChoice,
+	type PanelBackend,
+	type PanelEvent,
+	type PanelListener,
+	type SessionChoice,
+	AsidePanel,
+	TOGGLE_KEY,
+} from "./panel.ts";
+
+const FIRST_MESSAGE_CAP = 60;
 
 function sessionDir(): string {
 	return process.env.PI_ASIDE_SESSION_DIR || path.join(getAgentDir(), "aside-sessions");
@@ -26,7 +48,10 @@ class Aside implements PanelBackend {
 	private meta?: Meta;
 	private attached?: Promise<unknown>;
 	private detach?: () => void;
-	private snapshotModelId?: string;
+	/** The model the running side agent started with or switched to, as `provider/id`. */
+	private activeModel?: string;
+	/** The model picked with `/model`, kept for later side agent processes of this aside. */
+	private chosenModel?: string;
 
 	constructor(pi: ExtensionAPI, ctx: ExtensionContext, sessionId: string) {
 		this.pi = pi;
@@ -79,25 +104,74 @@ class Aside implements PanelBackend {
 
 	/** The status line's model text: the model the side agent started with, or main's model before it starts. */
 	modelLabel(): string {
-		const id = this.snapshotModelId ?? this.ctx.model?.id;
-		return id ? modelAlias(id) : "default model";
+		const key = this.activeModel ?? this.mainModel();
+		return key ? modelAlias(modelIdOf(key)) : "default model";
 	}
 
-	/** Stop the side agent and point the sidecar at a new session with no cursor. The old session file stays on disk. */
+	/** The running side agent's models, the active one marked. */
+	async listModels(): Promise<ModelChoice[]> {
+		const models = await this.live().getAvailableModels();
+		return models.map((m) => {
+			const key = `${m.provider}/${m.id}`;
+			return { id: key, title: modelAlias(m.id), detail: m.name && m.name !== m.id ? `${m.provider} \u00b7 ${m.name}` : m.provider, current: key === this.activeModel };
+		});
+	}
+
+	/** Switch the running side agent to the model `key`, as `provider/id`, and keep the choice for later processes. */
+	async setModel(key: string): Promise<string> {
+		const slash = key.indexOf("/");
+		if (slash <= 0) throw new Error(`${key} is not provider/id`);
+		await this.live().setModel(key.slice(0, slash), key.slice(slash + 1));
+		this.activeModel = key;
+		this.chosenModel = key;
+		return modelAlias(modelIdOf(key));
+	}
+
+	private mainModel(): string | undefined {
+		return this.ctx.model ? `${this.ctx.model.provider}/${this.ctx.model.id}` : undefined;
+	}
+
+	/** Stop the side agent and point the sidecar at a session numbered past every aside of this main session on disk. The old session file stays on disk. */
 	async startNew(): Promise<void> {
-		const next = nextSessionId(this.sessionId, this.currentSession());
-		this.slot.close();
+		const known = (await this.listSessions()).map((s) => s.id);
+		known.push(this.currentSession());
+		await this.switchTo(nextSessionId(this.sessionId, known));
+	}
+
+	/** Stop the side agent and point the sidecar at an earlier aside session. No-op for the current one. */
+	async resume(id: string): Promise<void> {
+		if (asideSessionNumber(this.sessionId, id) === undefined) throw new Error(`${id} is not an aside of this session`);
+		if (id !== this.currentSession()) await this.switchTo(id);
+	}
+
+	/** This main session's aside sessions on disk, newest first. */
+	async listSessions(): Promise<SessionChoice[]> {
+		const current = this.currentSession();
+		const infos = await SessionManager.listAll(this.dir);
+		return infos.flatMap((info) => {
+			const n = asideSessionNumber(this.sessionId, info.id);
+			if (n === undefined) return [];
+			const opened = stripTranscript(info.firstMessage).split("\n", 1)[0] ?? "";
+			const cut = opened.length > FIRST_MESSAGE_CAP ? `${opened.slice(0, FIRST_MESSAGE_CAP)}\u2026` : opened;
+			return [{ id: info.id, title: `aside ${n}`, detail: `${formatWhen(info.modified)}  ${cut}`.trimEnd(), current: info.id === current }];
+		});
+	}
+
+	/** Stop the side agent, park the feed cursor under the old session, and move the sidecar to `next`. Listeners hear `switched`. */
+	private async switchTo(next: string): Promise<void> {
+		const meta = switchSession(this.loadMeta(), this.currentSession(), next);
 		await this.stop();
 		this.child = undefined;
-		this.attached = undefined;
-		this.snapshotModelId = undefined;
-		this.meta = { session: next };
-		writeMeta(this.dir, this.sessionId, this.meta);
+		this.activeModel = undefined;
+		this.meta = meta;
+		writeMeta(this.dir, this.sessionId, meta);
+		for (const l of this.listeners) l.switched();
 	}
 
 	async stop(): Promise<void> {
 		this.detach?.();
 		this.detach = undefined;
+		this.attached = undefined;
 		await this.child?.stop();
 	}
 
@@ -109,6 +183,7 @@ class Aside implements PanelBackend {
 			for (const l of this.listeners) l.event(ev as PanelEvent);
 		});
 		void child.exited?.then((exit) => {
+			if (this.attached !== child.exited) return;
 			const detail = child.stderr.trim().split("\n").pop();
 			const reason = `Side agent exited (code ${exit.code ?? exit.signal ?? "unknown"})${detail ? `: ${detail}` : ""}. The next question starts a new one.`;
 			for (const l of this.listeners) l.exit(reason);
@@ -132,8 +207,8 @@ class Aside implements PanelBackend {
 
 	private ensureChild(): AsideChild {
 		if (!this.child) {
-			const model = this.ctx.model ? `${this.ctx.model.provider}/${this.ctx.model.id}` : undefined;
-			this.snapshotModelId = this.ctx.model?.id;
+			const model = this.chosenModel ?? this.mainModel();
+			this.activeModel = model;
 			this.child = new AsideChild({
 				sessionId: this.currentSession(),
 				sessionDir: this.dir,
@@ -145,6 +220,16 @@ class Aside implements PanelBackend {
 		}
 		return this.child;
 	}
+}
+
+function modelIdOf(key: string): string {
+	return key.slice(key.indexOf("/") + 1);
+}
+
+function formatWhen(date: Date): string {
+	const sameDay = date.toDateString() === new Date().toDateString();
+	const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+	return sameDay ? time : `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${time}`;
 }
 
 /** Hide a shown panel, or show a hidden one and bring it current, which counts as a panel open. */
@@ -166,7 +251,7 @@ async function openPanel(ctx: ExtensionContext, t: Aside): Promise<void> {
 		outsideClick: "hide",
 		build: (host, tui, theme) => {
 			paint = theme;
-			return new AsidePanel({ tui, theme, backend: t, model: t.modelLabel(), hide: () => host.hide() });
+			return new AsidePanel({ tui, theme, backend: t, model: t.modelLabel(), cwd: ctx.cwd, hide: () => host.hide() });
 		},
 	});
 }
@@ -204,7 +289,7 @@ export default function aside(pi: ExtensionAPI): void {
 
 	pi.registerShortcut(TOGGLE_KEY, { description: "Show or hide the aside panel", handler: (ctx) => void toggle(ctx) });
 	pi.registerCommand("aside", {
-		description: "Show or hide the aside panel, or `new` to start a fresh side agent",
+		description: "Show or hide the aside panel, or `new` to start a fresh side agent. In the panel, `/new` and `/resume` do the same.",
 		handler: (args, ctx) => (args.trim() === "new" ? startNew(ctx) : toggle(ctx)),
 	});
 

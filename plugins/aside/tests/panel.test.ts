@@ -4,7 +4,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI, TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { PromptDisposition } from "../../shared/rpc.ts";
-import { type PanelBackend, type PanelEvent, type PanelListener, AsidePanel } from "../extensions/panel.ts";
+import { type ModelChoice, type PanelBackend, type PanelEvent, type PanelListener, type SessionChoice, AsidePanel } from "../extensions/panel.ts";
 
 const theme = {
 	colors: {},
@@ -26,6 +26,12 @@ class FakeBackend implements PanelBackend {
 	hold = false;
 	listener?: PanelListener;
 	starts = 0;
+	sessions: SessionChoice[] = [];
+	resumed: string[] = [];
+	models: ModelChoice[] = [];
+	modelsSet: string[] = [];
+	/** Messages the next session seeds with, swapped in on a switch. */
+	nextMessages: AgentMessage[] = [];
 
 	async start() {
 		this.starts++;
@@ -48,6 +54,28 @@ class FakeBackend implements PanelBackend {
 			this.listener = undefined;
 			this.calls.push("unsubscribe");
 		};
+	}
+	async startNew() {
+		this.calls.push("startNew");
+		this.switchTo();
+	}
+	async resume(id: string) {
+		this.resumed.push(id);
+		this.switchTo();
+	}
+	async listSessions() {
+		return this.sessions;
+	}
+	async listModels() {
+		return this.models;
+	}
+	async setModel(id: string) {
+		this.modelsSet.push(id);
+		return id.split("/")[1];
+	}
+	switchTo() {
+		this.messages = this.nextMessages;
+		this.listener?.switched();
 	}
 	emit(ev: PanelEvent) {
 		this.listener?.event(ev);
@@ -142,6 +170,130 @@ describe("startup gap", () => {
 		assert.match(out, /x is a thing/);
 		assert.match(out, /read a\.ts/);
 		assert.doesNotMatch(out, /main-transcript|hidden/);
+	});
+});
+
+describe("commands", () => {
+	it("/new asks the backend for a fresh session and drops the transcript", async () => {
+		const { panel, backend } = setup();
+		await tick();
+		answer(backend, "old answer");
+		assert.match(text(panel), /old answer/);
+		for (const k of ["/", "n", "e", "w", "enter"]) panel.handleInput(k);
+		await tick();
+		await tick();
+		assert.deepEqual(backend.calls, ["startNew"]);
+		assert.deepEqual(backend.sent, []);
+		assert.doesNotMatch(text(panel), /old answer|\/new/);
+		assert.equal(backend.starts, 2);
+	});
+
+	it("/resume lists sessions, resumes the picked one, and seeds from it", async () => {
+		const b = new FakeBackend();
+		b.sessions = [
+			{ id: "aside-m-2", title: "aside 2", detail: "10:00  current question", current: true },
+			{ id: "aside-m", title: "aside 1", detail: "09:00  first question", current: false },
+		];
+		b.nextMessages = [{ role: "user", content: "first question" }] as unknown as AgentMessage[];
+		const { panel } = setup(b);
+		await tick();
+		answer(b, "second answer");
+		for (const k of ["/", "r", "e", "s", "u", "m", "e", "enter"]) panel.handleInput(k);
+		await tick();
+		const out = text(panel);
+		assert.match(out, /resume an aside/);
+		assert.match(out, /aside 2 \(current\)/);
+		assert.match(out, /aside 1/);
+		assert.match(panel.render(60).at(-1) ?? "", /enter resume/);
+		panel.handleInput("down");
+		panel.handleInput("enter");
+		await tick();
+		await tick();
+		assert.deepEqual(b.resumed, ["aside-m"]);
+		const after = text(panel);
+		assert.doesNotMatch(after, /resume an aside|second answer/);
+		assert.match(after, /first question/);
+	});
+
+	it("escape closes the picker and picking the current session changes nothing", async () => {
+		const b = new FakeBackend();
+		b.sessions = [{ id: "aside-m", title: "aside 1", detail: "", current: true }];
+		const { panel, log } = setup(b);
+		await tick();
+		answer(b, "kept");
+		for (const k of ["/", "r", "e", "s", "u", "m", "e", "enter"]) panel.handleInput(k);
+		await tick();
+		assert.match(text(panel), /resume an aside/);
+		panel.handleInput("escape");
+		assert.equal(log.hide, 0);
+		assert.doesNotMatch(text(panel), /resume an aside/);
+		assert.match(text(panel), /kept/);
+		for (const k of ["/", "r", "e", "s", "u", "m", "e", "enter"]) panel.handleInput(k);
+		await tick();
+		panel.handleInput("enter");
+		await tick();
+		assert.deepEqual(b.resumed, []);
+		assert.match(text(panel), /kept/);
+	});
+
+	it("/model starts the side agent, lists its models, switches, and updates the status line", async () => {
+		const b = new FakeBackend();
+		b.hold = true;
+		b.models = [
+			{ id: "anthropic/opus", title: "opus", detail: "anthropic", current: true },
+			{ id: "anthropic/sonnet", title: "sonnet", detail: "anthropic", current: false },
+			{ id: "openai/gpt", title: "gpt", detail: "openai", current: false },
+		];
+		const { panel } = setup(b);
+		for (const k of ["/", "m", "o", "d", "e", "l", "enter"]) panel.handleInput(k);
+		await tick();
+		assert.doesNotMatch(text(panel), /switch model/);
+		b.release?.();
+		await tick();
+		await tick();
+		await tick();
+		const out = text(panel);
+		assert.match(out, /switch model/);
+		assert.match(out, /opus \(current\)/);
+		assert.match(panel.render(60).at(-1) ?? "", /enter select/);
+		panel.handleInput("down");
+		panel.handleInput("enter");
+		await tick();
+		await tick();
+		assert.deepEqual(b.modelsSet, ["anthropic/sonnet"]);
+		assert.match(text(panel), /Model switched to sonnet/);
+		assert.match(panel.render(60).at(-1) ?? "", /sonnet · esc hide/);
+	});
+
+	it("/model with a filter narrows the list", async () => {
+		const b = new FakeBackend();
+		b.models = [
+			{ id: "anthropic/opus", title: "opus", detail: "anthropic", current: true },
+			{ id: "openai/gpt", title: "gpt", detail: "openai", current: false },
+		];
+		const { panel } = setup(b);
+		await tick();
+		for (const k of ["/", "m", "o", "d", "e", "l", " ", "g", "p", "enter"]) panel.handleInput(k);
+		await tick();
+		await tick();
+		assert.match(text(panel), /gpt/);
+		assert.doesNotMatch(text(panel), /opus/);
+		panel.handleInput("enter");
+		await tick();
+		await tick();
+		assert.deepEqual(b.modelsSet, ["openai/gpt"]);
+	});
+
+	it("/resume with no saved asides and an unknown command leave notes", async () => {
+		const { panel, backend } = setup();
+		await tick();
+		for (const k of ["/", "r", "e", "s", "u", "m", "e", "enter"]) panel.handleInput(k);
+		await tick();
+		assert.match(text(panel), /No saved asides/);
+		for (const k of ["/", "x", "enter"]) panel.handleInput(k);
+		await tick();
+		assert.match(text(panel), /Unknown command \/x\. Commands: \/new, \/resume, \/model/);
+		assert.deepEqual(backend.sent, []);
 	});
 });
 

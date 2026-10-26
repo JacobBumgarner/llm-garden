@@ -34,3 +34,8 @@ export function parseFrontmatter<T extends object>(content: string): { frontmatt
 	}
 	return { frontmatter: frontmatter as Partial<T>, body: content.slice(match[0].length) };
 }
+
+export function getSelectListTheme(): import("./pi-tui.ts").SelectListTheme {
+	const id = (text: string) => text;
+	return { selectedPrefix: id, selectedText: id, description: id, scrollInfo: id, noMatch: id };
+}

@@ -27,7 +27,7 @@ Extensions I've created to enhance `pi` to my workflow preferences.
 | `footer` | My custom footer for pi. |
 | `breath` | A one-cell box-breathing pacer in the footer status area. `/breath` toggles it, `/breath <theme role \| #rrggbb>` colors it. Disable the extension if you don't want it. |
 | `final-marker` | Draws a full-width rule above the assistant message that ends a turn, so the final answer stands out from intermediate narration between tool calls. |
-| `aside` | `Option+/` (or `/aside`) shows and hides a side panel over the conversation, holding a second agent with its own context and the main agent's tools. It sees what the main agent has done, can read the repo, run commands, and use MCP tools such as web search, and leaves the main session untouched. `/aside new` starts a fresh side agent and keeps the old session on disk. Its conversation is saved as a pi session under `~/.pi/agent/aside-sessions/` and reopens with the main session. |
+| `aside` | `Option+/` (or `/aside`) shows and hides a side panel over the conversation, holding a second agent with its own context and the main agent's tools. It sees what the main agent has done, can read the repo, run commands, and use MCP tools such as web search, and leaves the main session untouched. `/aside new`, or `/new` typed in the panel, starts a fresh side agent and keeps the old session on disk. `/resume` in the panel lists this main session's earlier asides and reopens the one picked, with the feed resuming where that aside left off. `/model [filter]` switches the side agent's model. Typing `/` in the panel offers these commands, and `@` completes paths. Its conversation is saved as a pi session under `~/.pi/agent/aside-sessions/` and reopens with the main session. |
 
 ## Install
 

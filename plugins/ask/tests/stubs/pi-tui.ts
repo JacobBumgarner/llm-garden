@@ -153,6 +153,13 @@ export class Editor {
 
 	constructor(_tui: TUI, _theme: EditorTheme) {}
 
+	/** The stub never pops a completion list. */
+	isShowingAutocomplete(): boolean {
+		return false;
+	}
+
+	setAutocompleteProvider(_provider: unknown): void {}
+
 	setText(text: string): void {
 		this.value = text;
 	}
@@ -170,7 +177,12 @@ export class Editor {
 	}
 
 	handleInput(data: string): void {
-		if (data === "enter") this.onSubmit?.(this.value);
+		if (data === "enter") {
+			// Like pi's editor: clear first, then hand the text to the submit handler.
+			const value = this.value;
+			this.value = "";
+			this.onSubmit?.(value);
+		}
 		else if (data === "shift+enter") this.value += "\n";
 		else this.value += data;
 	}
@@ -179,4 +191,73 @@ export class Editor {
 		const body = this.value.split("\n").flatMap((line) => wrapTextWithAnsi(line, width));
 		return ["─".repeat(width), ...body, "─".repeat(width)];
 	}
+}
+
+export interface SelectItem {
+	value: string;
+	label: string;
+	description?: string;
+}
+
+export interface SelectListTheme {
+	selectedPrefix: (text: string) => string;
+	selectedText: (text: string) => string;
+	description: (text: string) => string;
+	scrollInfo: (text: string) => string;
+	noMatch: (text: string) => string;
+}
+
+export interface SelectListLayoutOptions {
+	minPrimaryColumnWidth?: number;
+	maxPrimaryColumnWidth?: number;
+}
+
+/** A pick list: one row per item, the selected row marked with `>`. Keys are names, as in `Editor`. */
+export class SelectList {
+	onSelect?: (item: SelectItem) => void;
+	onCancel?: () => void;
+	private selected = 0;
+	private items: SelectItem[];
+	private readonly all: SelectItem[];
+
+	constructor(items: SelectItem[], _maxVisible: number, _theme: SelectListTheme, _layout?: SelectListLayoutOptions) {
+		this.items = items;
+		this.all = items;
+	}
+
+	setSelectedIndex(index: number): void {
+		this.selected = index;
+	}
+
+	/** Keep the rows whose label contains `filter`, case-insensitively. */
+	setFilter(filter: string): void {
+		const f = filter.toLowerCase();
+		this.items = this.all.filter((item) => item.label.toLowerCase().includes(f));
+		this.selected = 0;
+	}
+
+	getSelectedItem(): SelectItem | null {
+		return this.items[this.selected] ?? null;
+	}
+
+	handleInput(data: string): void {
+		const last = this.items.length - 1;
+		if (data === "up") this.selected = this.selected === 0 ? last : this.selected - 1;
+		else if (data === "down") this.selected = this.selected === last ? 0 : this.selected + 1;
+		else if (data === "enter") {
+			const item = this.items[this.selected];
+			if (item) this.onSelect?.(item);
+		} else if (data === "escape") this.onCancel?.();
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return this.items.map((item, i) => truncateToWidth(`${i === this.selected ? "> " : "  "}${item.label}  ${item.description ?? ""}`, width));
+	}
+}
+
+/** Stand-in for pi's slash and path completion. Tests never open it. */
+export class CombinedAutocompleteProvider {
+	constructor(_commands: unknown, _basePath: string) {}
 }
