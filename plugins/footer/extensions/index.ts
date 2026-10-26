@@ -62,6 +62,7 @@ const MODEL_COLOR: Record<string, string> = {
 	glm: "#99D594",
 	qwen3: "#8575CC",
 	haiku: "#FEE08B",
+	gpt6: "#66C2A5",
 };
 
 const MODEL_ALIAS: Record<string, string> = {
@@ -72,8 +73,13 @@ const MODEL_ALIAS: Record<string, string> = {
 	"claude-opus-5[1m]": "opus 5",
 	"claude-sonnet-5[1m]": "sonnet 5",
 	"claude-lillypod-glm[1m]": "glm",
+	"claude-lillypod-nemotron[1m]": "nemotron",
 	"qwen3-8-27b-fp8": "qwen3 27b",
 	"claude-haiku-4.5-20251001-v1": "haiku 4.5",
+	"claude-opus-5-5[1m]": "opus 5.5",
+	"claude-gpt-6-astra": "gpt6 astra",
+	"claude-gpt-6-sol": "gpt6 sol",
+	"claude-gpt-6-luna": "gpt6 luna",
 };
 
 function modelAlias(id: string): string {
