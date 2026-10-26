@@ -99,11 +99,27 @@ describe("summarize", () => {
 		]);
 	});
 
-	it("shows a done run with its state word and keeps turns and tokens", () => {
+	it("shows a done run with its cost and state word and keeps turns and tokens", () => {
 		const usage = { input: 12345, output: 1100, cost: 0.0412, turns: 2 };
 		const run = { agent: "scout", label: "Find it", state: "done", usage, lastTool: { name: "bash", args: {} } };
 		assert.deepEqual(summarize(tool("subagent", {}, done({ runs: [run] }))), [
-			"subagent scout · Find it · 2 turns · ↑12k ↓1.1k · done",
+			"subagent scout · Find it · 2 turns · ↑12k ↓1.1k · $0.04 · done",
+		]);
+	});
+
+	it("collapses a status call to counts instead of a row per run", () => {
+		const runs = [
+			{ agent: "a", label: "1", state: "running", usage: {} },
+			{ agent: "b", label: "2", state: "queued", usage: {} },
+			{ agent: "c", label: "3", state: "paused", usage: {} },
+			{ agent: "d", label: "4", state: "done", usage: {} },
+			{ agent: "e", label: "5", state: "failed", usage: {} },
+		];
+		assert.deepEqual(summarize(tool("subagent", { action: "status" }, done({ action: "status", runs }))), [
+			"subagent status · 2 running · 1 paused · 2 finished",
+		]);
+		assert.deepEqual(summarize(tool("subagent", { action: "status" }, done({ action: "status", runs: runs.slice(3) }))), [
+			"subagent status · 0 running · 2 finished",
 		]);
 	});
 

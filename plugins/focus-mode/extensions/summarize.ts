@@ -119,15 +119,36 @@ function usageParts(usage: Record<string, unknown>): string[] {
 	return parts;
 }
 
-/** Progress text for one run snapshot: usage and last tool while running, usage and the state word otherwise. */
+/** Progress text for one run snapshot: usage and cost, then the last tool while running or the state word otherwise. */
 function runProgress(run: Record<string, unknown>): string[] {
 	const usage = asRecord(run.usage);
 	const parts = usageParts(usage);
-	if (run.state !== "running") return [...parts, str(run.state) ?? ""].filter(Boolean);
 	if (typeof usage.cost === "number" && usage.cost > 0) parts.push(`$${usage.cost.toFixed(2)}`);
+	if (run.state !== "running") return [...parts, str(run.state) ?? ""].filter(Boolean);
 	const tool = str(asRecord(run.lastTool).name);
 	if (tool) parts.push(`→ ${tool}`);
 	return parts;
+}
+
+/** The states a status line counts as still going. */
+const LIVE_STATES = new Set(["queued", "running"]);
+
+/**
+ * One line for a `status` call, which carries every run of the session: counts by running,
+ * paused, and finished, so a long session does not draw a row per run.
+ */
+function statusLine(runs: Record<string, unknown>[]): string {
+	let running = 0;
+	let paused = 0;
+	for (const run of runs) {
+		if (LIVE_STATES.has(str(run.state) ?? "")) running++;
+		else if (run.state === "paused") paused++;
+	}
+	const finished = runs.length - running - paused;
+	const parts = [`${running} running`];
+	if (paused > 0) parts.push(`${paused} paused`);
+	parts.push(`${finished} finished`);
+	return ["subagent status", ...parts].join(" · ");
 }
 
 /** Join a run's identity and trailing parts into one `subagent` line. */
@@ -150,6 +171,7 @@ function subagentArgsLines(args: Record<string, unknown>): string[] {
 function summarizeSubagent(item: ToolItem, running: boolean): string[] {
 	const runs = asArray(asRecord(item.result?.details).runs).map(asRecord);
 	if (runs.length === 0) return subagentArgsLines(item.args).map((line) => mark(line, running));
+	if (item.args.action === "status") return [mark(statusLine(runs), running)];
 	return runs.map((run) => {
 		const base = runLine(str(run.agent), str(run.label), runProgress(run));
 		return mark(run.state === "failed" ? `${base} error` : base, running);
