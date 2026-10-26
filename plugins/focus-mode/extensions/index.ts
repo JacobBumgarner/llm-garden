@@ -25,8 +25,10 @@
  * - `off`: the resolver hands back whatever pi would have used.
  *
  * The action log behind the counter and the panel is fed by pi's tool execution events and seeded
- * from the session branch on join, so resumed sessions list their past calls too. The transcript,
- * scrolling, images, and search stay pi's own.
+ * from the session branch on join, so resumed sessions list their past calls too. The subagent
+ * tool's calls are listed in the panel (never counted), and the `subagent:activity` event the
+ * subagent plugin emits per delegate message nests that delegate's text, thinking, and tool calls
+ * under the call that started it. The transcript, scrolling, images, and search stay pi's own.
  *
  * Thinking blocks stay visible; pi's `hideThinkingBlock` setting (toggled with ctrl+t, or by
  * clicking a run) is the only thing that collapses them, and the extension API offers no per-mode
@@ -75,6 +77,8 @@ export type Placement = "turn" | "step";
 const PLACEMENTS: Placement[] = ["turn", "step"];
 /** Tools that stay visible as strips in hidden mode and are left out of the counter. */
 const VISIBLE_TOOLS = ["subagent"];
+/** The event the subagent plugin emits with each message a delegate completes. */
+const ACTIVITY_EVENT = "subagent:activity";
 const PANEL_KEY = "alt+t";
 /** Session entry type holding a finished turn's counts. */
 const COUNT_ENTRY = "focus-actions";
@@ -443,6 +447,15 @@ export default function focusMode(pi: ExtensionAPI): void {
 	});
 	pi.on("tool_execution_start", (event) => {
 		log.start(event.toolCallId, event.toolName, (event.args ?? {}) as Record<string, unknown>, event.parentToolCallId);
+	});
+	// A delegate's message nests under the orchestrator's subagent call, ids prefixed by the run so
+	// two delegates' calls cannot collide, and every event refreshes that call's row with the run's
+	// state and usage. Runs without a recorded call (restored sessions) are skipped.
+	pi.events.on(ACTIVITY_EVENT, (data) => {
+		const { runId, callId, message, state, usage, lastTool } = (data ?? {}) as Record<string, unknown>;
+		if (typeof runId !== "string" || typeof callId !== "string") return;
+		if (message) log.addNested(callId, `${runId}:`, message);
+		if (typeof state === "string") log.updateRun(callId, runId, { state, usage, lastTool });
 	});
 	pi.on("tool_execution_update", (event) => {
 		const partial = event.partialResult as { content?: unknown; details?: unknown } | undefined;
