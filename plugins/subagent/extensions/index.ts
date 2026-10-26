@@ -67,6 +67,7 @@ import {
 	formatRunResult,
 	formatStarted,
 	formatStatus,
+	formatStatusSummary,
 	formatToolCall,
 	formatUsageStats,
 	formatWaitSections,
@@ -586,7 +587,7 @@ function renderResult(details: SubagentDetails, text: string, expanded: boolean,
 		case "detached":
 			return renderNotice("detached, still working", details.runs, theme);
 		case "status":
-			return new Text(theme.fg("dim", text), 0, 0);
+			return new Text(theme.fg("dim", expanded ? text : formatStatusSummary(details.runs)), 0, 0);
 		case "error":
 			return new Text(theme.fg("error", text), 0, 0);
 		default:

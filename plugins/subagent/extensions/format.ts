@@ -505,6 +505,21 @@ export function formatStatus(runs: Run[], now: number): string {
 	return runs.map((run) => formatStatusLine(run, now)).join("\n");
 }
 
+/** Render the status listing as one line of counts: running (queued included), paused when any, and finished. Ctrl+O shows the rows. */
+export function formatStatusSummary(runs: { state: Run["state"] }[]): string {
+	if (runs.length === 0) return "No subagent runs in this session.";
+	let running = 0;
+	let paused = 0;
+	for (const run of runs) {
+		if (run.state === "queued" || run.state === "running") running++;
+		else if (run.state === "paused") paused++;
+	}
+	const parts = [`${running} running`];
+	if (paused > 0) parts.push(`${paused} paused`);
+	parts.push(`${runs.length - running - paused} finished`, "(Ctrl+O to expand)");
+	return parts.join(" \u00b7 ");
+}
+
 /** Collect the text blocks and tool calls of every assistant message, in order. */
 export function getDisplayItems(messages: Message[]): DisplayItem[] {
 	const items: DisplayItem[] = [];

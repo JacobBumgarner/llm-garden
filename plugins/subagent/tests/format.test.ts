@@ -20,6 +20,7 @@ import {
 	formatSessionFooter,
 	formatStarted,
 	formatStatus,
+	formatStatusSummary,
 	formatStatusLine,
 	formatToolCall,
 	formatUsageStats,
@@ -239,6 +240,16 @@ test("formatWaitSections separates sections and reports an empty wait", () => {
 test("formatStatusLine shows id, agent, state, turns, tokens, age, and the label", () => {
 	assert.equal(formatStatusLine(run(), 1_014_000), 'sub-abc12345 [glm] done · 3 turns ↑12k ↓2.1k · 14s ago · Say pong');
 	assert.ok(!formatStatusLine(run(), 1_014_000).includes("say pong"));
+});
+
+test("formatStatusSummary counts runs by state on one line, naming paused only when any", () => {
+	assert.equal(formatStatusSummary([]), "No subagent runs in this session.");
+	const states = ["running", "queued", "paused", "done", "failed", "stopped"] as const;
+	assert.equal(
+		formatStatusSummary(states.map((state) => ({ state }))),
+		"2 running \u00b7 1 paused \u00b7 3 finished \u00b7 (Ctrl+O to expand)",
+	);
+	assert.equal(formatStatusSummary([{ state: "done" }]), "0 running \u00b7 1 finished \u00b7 (Ctrl+O to expand)");
 });
 
 test("formatStatus lists one line per run or says there are none", () => {
