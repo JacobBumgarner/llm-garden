@@ -59,6 +59,7 @@ On top of the repo's conventions and gates:
 
 The title carries the stage and says what the change does, under about 60
 characters: `[s2] client: ask the server for its minimum client version`.
+A fix commit after the user's review is titled `[cN] fix: what it does`, where cN is the semantic commit it belongs to, in the same body form.
 
 The body has two parts separated by a line holding only `---`. Above it, the
 technical description. Below it, the plain description. Either part is as long
