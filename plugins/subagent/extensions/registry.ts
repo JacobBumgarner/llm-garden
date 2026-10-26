@@ -45,11 +45,15 @@ export interface RunSpec {
 	background?: boolean;
 	notify?: "wake" | "quiet";
 	dispatch?: DispatchDefaults;
+	/** The orchestrator's tool call making the start, recorded on the run. */
+	callId?: string;
 }
 
 export type ResumeInput = ({ answers: Record<string, string>; task?: undefined } | { task: string; label?: string; answers?: undefined }) & {
 	/** Replaces the dispatch defaults for a respawned child. */
 	dispatch?: DispatchDefaults;
+	/** The orchestrator's tool call making the resume, which replaces the run's recorded call. */
+	callId?: string;
 };
 
 /** The flags for one child and the cleanup for anything written to build them. */
@@ -338,6 +342,7 @@ export class RunRegistry {
 		if (queues && !run.client && !this.canQueueLaunch()) throw new Error(this.liveCapMessage());
 		if (!existing) this.entries.set(id, entry);
 		if (input.dispatch) entry.dispatch = input.dispatch;
+		if (input.callId) run.callId = input.callId;
 		const prompt = this.resumePrompt(run, input);
 		if (queues) {
 			this.enqueue(entry, prompt);
@@ -468,6 +473,7 @@ export class RunRegistry {
 				task: spec.task,
 				cwd: spec.cwd,
 				model: spec.agent.model ?? spec.dispatch?.model,
+				callId: spec.callId,
 				state: "queued",
 				background: spec.background ?? false,
 				notify: spec.notify ?? "wake",

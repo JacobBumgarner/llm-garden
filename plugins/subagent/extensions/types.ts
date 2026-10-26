@@ -69,6 +69,8 @@ export interface Run {
 	task: string;
 	cwd?: string;
 	model?: string;
+	/** The orchestrator's tool call that started the run or last resumed it. Absent for a session restored from its meta file until a resume names one. */
+	callId?: string;
 	state: RunState;
 	background: boolean;
 	notify: "wake" | "quiet";

@@ -24,7 +24,9 @@
  * `session_shutdown`, which stops every live delegate. A result courier posts
  * each background result that no `wait` collected as a `subagent-result`
  * message, which wakes an idle orchestrator unless the run was started with
- * `notify: "quiet"`. Inside a cmux workspace, a progress reporter mirrors the
+ * `notify: "quiet"`. An activity feed publishes every message a delegate
+ * completes as `subagent:activity`, keyed by the tool call that started or
+ * last resumed the run, for the focus-mode actions panel to nest. Inside a cmux workspace, a progress reporter mirrors the
  * live runs onto the workspace progress bar (`done/total agents`) and clears
  * it when none is left. A live view publishes the queued, running, and paused
  * runs on `pi.events` as `subagent:live`, `/subagents` opens a bordered
@@ -50,6 +52,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import { createActivityFeed } from "./activity.ts";
 import { type AgentConfig, type AgentScope, describeAgents, discoverAgents } from "./agents.ts";
 import { type BriefConfig, describeBriefs, discoverBriefs } from "./briefs.ts";
 import { type BlockedCalls, createBlockedCalls, type DetachReason, shouldDetachOnInput } from "./blocked.ts";
@@ -109,6 +112,8 @@ type OnUpdate = ((partial: ToolResult) => void) | undefined;
 interface Call {
 	registry: RunRegistry;
 	ctx: ExtensionContext;
+	/** The orchestrator's tool call id, recorded on the runs it starts or resumes. */
+	callId: string;
 	signal?: AbortSignal;
 	blocked: BlockedCalls;
 	onUpdate: OnUpdate;
@@ -307,6 +312,7 @@ async function startTasks(
 				background,
 				notify: request.notify,
 				dispatch: call.dispatch,
+				callId: call.callId,
 			});
 			started.push(run);
 		} catch (err) {
@@ -385,10 +391,10 @@ function finishedStopResult(registry: RunRegistry, run: Run): ToolResult {
  * started notice at once instead.
  */
 async function handleResume(request: RequestOf<"resume">, call: Call): Promise<ToolResult> {
-	const { dispatch } = call;
+	const { dispatch, callId } = call;
 	const input = request.answers
-		? { answers: request.answers, dispatch }
-		: { task: request.task as string, label: request.label, dispatch };
+		? { answers: request.answers, dispatch, callId }
+		: { task: request.task as string, label: request.label, dispatch, callId };
 	const run = await call.registry.resume(request.id, input);
 	if (request.background === true && call.canBackground) return startedView("resume", [run]);
 	return awaitRuns(call, "resume", [run], { sectioned: false });
@@ -638,13 +644,17 @@ export default function (pi: ExtensionAPI) {
 		disposers = [
 			createCourier(created, pi, {
 				isIdle: () => latestCtx?.isIdle() ?? true,
+				// agent_settled, not agent_end: pi stays busy (isIdle false) through its post-run work and
+				// every extension's settle handler, so a timer armed on agent_end can fire into a turn that
+				// is still winding down and strand the batch until the next turn ends.
 				onTurnEnd: (fn) =>
-					pi.on("agent_end", (_event, ctx) => {
+					pi.on("agent_settled", (_event, ctx) => {
 						latestCtx = ctx;
 						fn();
 					}),
 			}),
 			createLiveView(pi, created, () => latestCtx),
+			createActivityFeed(created, pi.events),
 			createCmuxProgress(created),
 		];
 		return created;
@@ -700,13 +710,14 @@ export default function (pi: ExtensionAPI) {
 		].join(" "),
 		parameters: SubagentParams,
 
-		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const parsed = parseParams(params as Record<string, unknown>);
 			if (!parsed.ok) return errorResult("invalid", parsed.error);
 			latestCtx = ctx;
 			const call: Call = {
 				registry: getRegistry(ctx),
 				ctx,
+				callId: toolCallId,
 				signal,
 				blocked,
 				onUpdate: onUpdate as OnUpdate,

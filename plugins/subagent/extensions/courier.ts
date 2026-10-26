@@ -3,7 +3,8 @@
  * orchestrator's session. Runs that settle within one second of each other go
  * out as one `subagent-result` message, which wakes an idle orchestrator unless
  * every run in it was started quiet. While the orchestrator is mid-turn the
- * courier holds results and posts them when the turn ends. Imports types only from pi packages.
+ * courier holds results and posts them once the turn settles (`agent_settled`,
+ * when pi reports idle again). Imports types only from pi packages.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
