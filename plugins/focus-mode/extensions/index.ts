@@ -5,7 +5,8 @@
  * `/focus hidden turn|step` also picks the counter placement):
  *
  * - `hidden` (the default): tool calls do not render at all, except the subagent tool, which draws
- *   as its one-line strip so delegations stay visible. Each turn's other calls stand behind one
+ *   as its one-line strip so delegations stay visible; a click on that strip opens the subagent
+ *   tool's own expanded result under it. Each turn's other calls stand behind one
  *   counter line (`● 4 actions`). Where it goes is the placement, set with `/focus hidden turn|step`:
  *   `step` (the default) draws one counter after each run of calls between pieces of assistant
  *   text, so the transcript shows when the agent acted; `turn` draws it where the latest call is
@@ -37,6 +38,7 @@
 
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import {
+	Box,
 	type Component,
 	truncateToWidth,
 	type TuiMouseEvent,
@@ -67,6 +69,8 @@ const STRIP_BG: Record<StripColor, "toolPendingBg" | "toolSuccessBg" | "toolErro
 	error: "toolErrorBg",
 };
 
+/** Columns a visible tool's own expanded result is indented under its strip. */
+const DETAIL_INDENT = 2;
 /** How often a running strip redraws so its elapsed time ticks. */
 const TICK_MS = 1000;
 
@@ -296,13 +300,18 @@ class Tickers {
 	}
 }
 
-/** Renderers for the mode: the strip on the call slot, state capture on the result slot. */
-function focusRenderers(toolName: string, tickers: Tickers, onTheme: (theme: Theme) => void): ToolRenderers {
+/**
+ * Renderers for the mode: the strip on the call slot, state capture on the result slot. With a
+ * `detail` renderer (the tool's own, for a tool that stays visible in hidden mode), an expanded
+ * strip keeps its one-line look and draws the tool's own expanded result under it, indented,
+ * instead of the argument and output dump.
+ */
+function focusRenderers(toolName: string, tickers: Tickers, onTheme: (theme: Theme) => void, detail?: ToolRenderers): ToolRenderers {
 	return {
 		renderShell: "self",
 		renderCall: (args, theme, context: StripContext) => {
 			onTheme(theme);
-			context.state.expanded = context.expanded;
+			context.state.expanded = context.expanded && !detail?.renderResult;
 			const running = context.state.result === undefined || context.state.result.partial === true;
 			if (context.executionStarted && running) {
 				context.state.startedAt ??= Date.now();
@@ -310,20 +319,23 @@ function focusRenderers(toolName: string, tickers: Tickers, onTheme: (theme: The
 			}
 			return new Strip(toolName, (args ?? {}) as Record<string, unknown>, context.state, theme);
 		},
-		renderResult: (result, options, _theme, context: StripContext) => {
+		renderResult: (result, options, theme, context: StripContext) => {
 			context.state.result = {
 				text: resultText(result.content),
 				details: result.details,
 				isError: context.isError,
 				partial: options.isPartial,
 			};
-			context.state.expanded = options.expanded;
+			context.state.expanded = options.expanded && !detail?.renderResult;
 			if (!options.isPartial) {
 				tickers.stop(context.toolCallId);
 				context.state.durationMs ??=
 					context.durationMs ?? (context.state.startedAt === undefined ? undefined : Date.now() - context.state.startedAt);
 			}
-			return EMPTY;
+			if (!options.expanded || options.isPartial || !detail?.renderResult) return EMPTY;
+			const box = new Box(DETAIL_INDENT, 0);
+			box.addChild(detail.renderResult(result, { ...options, expanded: true }, theme, context as never));
+			return box;
 		},
 	};
 }
@@ -372,8 +384,9 @@ function switchable(
 	onTheme: (theme: Theme) => void,
 	openPanel: (target: PanelTarget) => void,
 ): ToolRenderers {
-	const strips = focusRenderers(toolName, tickers, onTheme);
-	const hidden = VISIBLE_TOOLS.includes(toolName) ? strips : hiddenRenderers(log, redraws, placement, openPanel);
+	const visible = VISIBLE_TOOLS.includes(toolName);
+	const strips = focusRenderers(toolName, tickers, onTheme, visible ? base : undefined);
+	const hidden = visible ? strips : hiddenRenderers(log, redraws, placement, openPanel);
 	const pick = (): ToolRenderers | undefined => {
 		switch (level()) {
 			case "hidden":
