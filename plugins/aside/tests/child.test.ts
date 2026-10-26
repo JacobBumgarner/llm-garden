@@ -38,6 +38,12 @@ class FakeClient implements AsideClient {
 	async getMessages() {
 		return [];
 	}
+	async getAvailableModels() {
+		return [];
+	}
+	async setModel(provider: string, modelId: string) {
+		this.calls.push(`model:${provider}/${modelId}`);
+	}
 	onEvent() {
 		return () => {};
 	}

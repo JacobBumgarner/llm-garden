@@ -10,6 +10,7 @@ import {
 	DelegateClient,
 	type DelegateClientOptions,
 	type DelegateExit,
+	type DelegateModel,
 	type PromptDisposition,
 } from "../../shared/rpc.ts";
 import { buildChildArgs, writePromptToTempFile } from "../../shared/spawn.ts";
@@ -24,6 +25,8 @@ export interface AsideClient {
 	abort(): Promise<void>;
 	setSessionName(name: string): Promise<void>;
 	getMessages(): Promise<AgentMessage[]>;
+	getAvailableModels(): Promise<DelegateModel[]>;
+	setModel(provider: string, modelId: string): Promise<void>;
 	onEvent(fn: (ev: JsonAgentSessionEvent) => void): () => void;
 	stop(): Promise<void>;
 }
@@ -93,6 +96,14 @@ export class AsideChild {
 
 	getMessages(): Promise<AgentMessage[]> {
 		return this.live().getMessages();
+	}
+
+	getAvailableModels(): Promise<DelegateModel[]> {
+		return this.live().getAvailableModels();
+	}
+
+	setModel(provider: string, modelId: string): Promise<void> {
+		return this.live().setModel(provider, modelId);
 	}
 
 	/** Subscribe to child events. Returns the unsubscribe function. */
