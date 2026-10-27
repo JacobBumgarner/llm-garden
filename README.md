@@ -1,20 +1,26 @@
 # llm-garden
-A public repo of skills, agent files, instructions, and other preferences I have
-for building software with LLMs.
+A public repo of skills, agent prompts, `pi` extensions, and other preferences I
+have for building software with LLMs.
 
-The skills follow the [Agent Skills spec](https://agentskills.io/specification)
-and install into both Claude Code and pi.
+Skills follow the [Agent Skills spec](https://agentskills.io/specification)
+and install into both `pi` and Claude Code.
 
-## Skills
+These days I am exclusively using the `pi` harness for development work.
 
-| Plugin | Skill | Details |
-| --- | --- | --- |
-| `rubato` | `orchestrate` | A phased workflow where agents design and build while the user reviews at fixed checkpoints, acting as tech lead rather than author. Four phases: discovery (Q&A and recon), whiteboard (iterated design, presented as a pitch and the questions it survived), plan (staged into ordered, verifiable units), and build (implement, review, cleanup, and a final report against what was approved). |
-| `rubato` | `code-review` | Rewrites a branch of agent stage commits into a series of semantic commits a person can read, checks that the final code is unchanged, then takes the user's `tuicr` review and records what to fix. |
+### Contents
+
+- [pi extensions](#pi-extensions)
+- [Skills](#skills)
+- [Installation](#installation)
+  - [pi](#pi)
+  - [Claude Code](#claude-code)
+- [Configs](#configs)
+  - [Dotfiles](#dotfiles)
+  - [New Mac setup](#new-mac-setup)
 
 ## pi extensions
 
-Extensions I've created to enhance `pi` to my workflow preferences.
+Extensions I've vibe-coded to adapt `pi` to my workflow preferences.
 
 | Extension | Details |
 | --- | --- |
@@ -30,7 +36,39 @@ Extensions I've created to enhance `pi` to my workflow preferences.
 | `clean-copy` | Cleans fullscreen mouse selections before they reach the clipboard: strips the transcript gutter and restores the agent's own line breaks by finding the selection in the session's message text, so a sentence pi wrapped across rows copies as one line. |
 | `aside` | `Option+/` (or `/aside`) shows and hides a side panel over the conversation, holding a second agent with its own context and the main agent's tools. It sees what the main agent has done, can read the repo, run commands, and use MCP tools such as web search, and leaves the main session untouched. `/aside new`, or `/new` typed in the panel, starts a fresh side agent and keeps the old session on disk. `/resume` in the panel lists this main session's earlier asides and reopens the one picked, with the feed resuming where that aside left off. `/model [filter]` switches the side agent's model. Typing `/` in the panel offers these commands, and `@` completes paths. Its conversation is saved as a pi session under `~/.pi/agent/aside-sessions/` and reopens with the main session. |
 
-## Install
+
+## Skills
+
+These two skills are the primary way I develop software with LLMs. 
+
+New work, features, fixes, etc. start with me invoking the `/orchestrate`
+command. The orchestration skill guides the user and agents through a dev
+lifecycle until the work is complete. I review agent code with `/code-review`,
+which is a built-in step of the orchestration review. 
+
+I am still experimenting with creating software with LLMs. I'm finding an
+inverse correlation with acceleration of work and my sense of connectedness and
+grounding to the underlying codebase. I'm interested in taking advantage of the
+acclerative capabilities of LLMs, but am not comfortable with losing touch of
+the design, code, and organization. These skills represent my ever-evolving
+experimentation with this new technology. There are many other workflows around,
+but this one is mine :) 
+
+| Plugin | Skill | Details |
+| --- | --- | --- |
+| `rubato` | `orchestrate` | A phased development wrkflow where agents design and build while the user reviews at fixed checkpoints. Aims to place the dev into a "tech lead" position rather than author. Four phases: discovery (Q&A and recon), whiteboard (iterated design, presented as a pitch and the questions it survived), plan (staged into ordered, verifiable units), and build (implement, review, cleanup, and a final report against what was approved). |
+| `rubato` | `code-review` | Rewrites a branch of agent stage commits into a series of semantic commits a person can review, checks that the final code is unchanged, then takes the user's `tuicr` review and records what to fix. |
+
+
+## Installation
+
+### pi
+
+```
+pi install git:github.com/JacobBumgarner/llm-garden
+```
+
+Update with `pi update --extensions`.
 
 ### Claude Code
 
@@ -41,17 +79,14 @@ Extensions I've created to enhance `pi` to my workflow preferences.
 
 Update with `/plugin marketplace update llm-garden`.
 
-### pi
+## Configs
 
-```
-pi install git:github.com/JacobBumgarner/llm-garden
-```
+Below are a list of configs and an installation script to ensure these
+extensions can be easily migrated to a new computer.
 
-Update with `pi update --extensions`.
+### Dotfiles
 
-## Dotfiles
-
-| File | Lives at |
+| File | Location |
 | --- | --- |
 | `dotfiles/ghostty/config` | `~/.config/ghostty/config` |
 | `dotfiles/cmux/cmux.json` | `~/.config/cmux/cmux.json` |
@@ -60,7 +95,7 @@ Update with `pi update --extensions`.
 | `dotfiles/lazygit/config.yml` | `~/.config/lazygit/config.yml` |
 | `dotfiles/git/delta.gitconfig` | `~/.config/git/delta.gitconfig` |
 
-### New mac
+### New Mac setup
 
 ```
 brew bundle --file dotfiles/Brewfile   # lazygit, delta, gh, ripgrep, tmux, tuicr, ghostty, cmux
