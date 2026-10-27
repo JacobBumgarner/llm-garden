@@ -13,6 +13,15 @@ describe("normalize", () => {
 });
 
 describe("findInSources", () => {
+	test("matches rendered text against source with inline code and emphasis", () => {
+		const source = "1. You want `clean-copy.ts` under version control with **semantic** commits. Does it belong in a plugin dir, or should `~/.pi/agent/extensions` become its own repo?";
+		const screen = "control with semantic commits. Does it belong in a plugin\n   dir, or should ~/.pi/agent/extensions become its own";
+		assert.equal(
+			findInSources(screen, [source]),
+			"control with **semantic** commits. Does it belong in a plugin dir, or should `~/.pi/agent/extensions` become its own",
+		);
+	});
+
 	test("joins a wrapped row back into the source sentence", () => {
 		const screen = " paragraph that is long enough to\n wrap in a narrow";
 		assert.equal(findInSources(screen, [paragraph]), "paragraph that is long enough to wrap in a narrow");

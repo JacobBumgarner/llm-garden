@@ -4,15 +4,20 @@
 // including rows pi only wrapped to fit the width. The source text has only
 // the newlines the author wrote. Collapsing whitespace on both sides makes
 // them comparable, and an offset map turns the match back into a slice of
-// the source.
+// the source. Markdown delimiters the renderer never draws (backticks,
+// emphasis markers, link brackets) are skipped on both sides too, so a
+// paragraph with inline code still matches.
 
-/** `text` with whitespace runs collapsed to one space; `map[i]` is the source offset of `text[i]`. */
+const IGNORED = /[`*_~[\]]/;
+
+/** `text` with whitespace collapsed and markdown delimiters dropped; `map[i]` is the source offset of `text[i]`. */
 export function normalize(source: string): { text: string; map: number[] } {
 	let text = "";
 	const map: number[] = [];
 	let inSpace = true;
 	for (let i = 0; i < source.length; i++) {
 		const ch = source[i];
+		if (IGNORED.test(ch)) continue;
 		if (/\s/.test(ch)) {
 			if (!inSpace) {
 				text += " ";
