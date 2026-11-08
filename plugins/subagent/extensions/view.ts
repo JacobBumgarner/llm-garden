@@ -3,7 +3,7 @@
  * `/subagents` overlay (the shared overlay draws its frame) that lists every run of the
  * session, running runs above finished ones under headers that always draw,
  * scrolling the list through a viewport to fit the height pi gives the overlay, with keys to
- * stop, steer, or answer the selected one, or open its actions panel (the
+ * stop, restart, steer, or answer the selected one, or open its actions panel (the
  * focus-mode panel over the run's own tool calls). A click on a run row
  * selects it and opens its actions panel, and a drag selects text and copies
  * it to the clipboard, as in the aside panel, scrolling on while the pointer is held past the
@@ -27,15 +27,8 @@ import { cellAt, DragAutoScroll, highlightSelection, type PaintedText, TextSelec
 import { Viewport } from "../../shared/viewport.ts";
 import type { AskQuestion } from "../../ask/api.ts";
 import { ActionLog, ActionsPanel, PANEL_MIN_WIDTH, PANEL_WIDTH } from "../../focus-mode/api.ts";
-import {
-	formatOverlayRow,
-	layoutOverlay,
-	type OverlayEntry,
-	type OverlayPaint,
-	overlayRowWidth,
-	overlayStateColor,
-} from "./format.ts";
-import { isLive } from "./registry.ts";
+import { formatOverlayRow, layoutOverlay, type OverlayEntry, type OverlayPaint, overlayRowWidth } from "./format.ts";
+import { isLive, type RestartReason, stallAge } from "./registry.ts";
 import type { Run } from "./types.ts";
 
 export const LIVE_EVENT = "subagent:live";
@@ -53,7 +46,7 @@ const BOX_EDGES = 2;
 const FIXED_LINES = 3;
 /** Rows of the leading blank above the scrolling body. */
 const BODY_TOP = 1;
-const HELP_LINE = "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close";
+const HELP_LINE = "↑↓ select · ←→ pan · s stop · r restart · m message · a answer · esc or alt+a close";
 /** Columns one ← or → key (or one shift+wheel tick) pans, matching the actions panel. */
 export const PAN_STEP = 8;
 
@@ -63,6 +56,7 @@ export interface ViewRegistry {
 	list(): Run[];
 	stop(id: string): Promise<void>;
 	stopAll(): Promise<void>;
+	restart(id: string, reason: RestartReason): Promise<Run>;
 	send(id: string, text: string, mode: "steer" | "follow_up"): Promise<string>;
 	resume(id: string, input: { answers: Record<string, string> }): Promise<Run>;
 }
@@ -75,11 +69,14 @@ export interface LiveRun {
 	agent: string;
 	label: string;
 	state: Run["state"];
+	/** True while the run's model request has been in flight past the stall mark. */
+	stalled: boolean;
 }
 
 /**
  * Emit `subagent:live` with the queued, running, and paused runs on every
- * registry change, answer `subagent:open` by opening the overlay, and answer
+ * registry change, each flagged stalled when its model request has passed the
+ * stall mark (the registry emits at that mark), answer `subagent:open` by opening the overlay, and answer
  * `subagent:stop-all` by confirming and stopping every running run. Both answers
  * use the context from `getCtx` and apply in the terminal UI only. Return the
  * dispose function, which unsubscribes and emits an empty list.
@@ -90,10 +87,11 @@ export function createLiveView(
 	getCtx: () => ExtensionContext | undefined,
 ): () => void {
 	const publish = () => {
+		const now = Date.now();
 		const runs: LiveRun[] = registry
 			.list()
 			.filter(isLive)
-			.map(({ id, agent, label, state }) => ({ id, agent, label, state }));
+			.map((run) => ({ id: run.id, agent: run.agent, label: run.label, state: run.state, stalled: stallAge(run, now) !== undefined }));
 		pi.events.emit(LIVE_EVENT, { count: runs.length, runs });
 	};
 	const inTui = (handle: (ctx: ExtensionContext) => Promise<void>) => () => {
@@ -142,7 +140,7 @@ export interface RunListDeps {
 	rows: () => number;
 	/** Style the selected row. */
 	highlight: (text: string) => string;
-	/** Color the icon and state word of an unselected row by the run state. */
+	/** Color the icon and state word of an unselected row by the run's tone: its state, or warning while stalled. */
 	paint: OverlayPaint;
 	/** Style the key line, headers, and empty-group lines. */
 	dim: (text: string) => string;
@@ -165,7 +163,7 @@ type RunAction = (run: Run) => Promise<void>;
  * and the selected row takes the highlight alone. The arrow keys move a
  * selection over runs and skip headers, gaps, and `(none)` lines. Keys act on
  * the selected run: space opens its actions panel, `s` stops it after a
- * confirm, `m` steers it, `a` answers a paused run, esc closes. Every entry is
+ * confirm, `r` restarts its child after a confirm, `m` steers it, `a` answers a paused run, esc closes. Every entry is
  * painted, and a viewport scrolls them to fit the overlay's height, moving the
  * least that keeps the selected run in view. PgUp/PgDn move the selection by a page,
  * Home/End to the first and last run, and the wheel by one run a tick.
@@ -340,6 +338,7 @@ export class RunListView {
 		if (data === "0") return this.panBy(Number.NEGATIVE_INFINITY);
 		if (matchesKey(data, "space")) return this.act(this.actions);
 		if (matchesKey(data, "s")) return this.act(this.stop);
+		if (matchesKey(data, "r")) return this.act(this.restart);
 		if (matchesKey(data, "m")) return this.act(this.message);
 		if (matchesKey(data, "a")) return this.act(this.answer);
 	}
@@ -465,6 +464,20 @@ export class RunListView {
 		if (confirmed) await registry.stop(run.id);
 	}
 
+	/** Replace a running run's child after a confirm. The new child continues on the same session file. */
+	private async restart(run: Run): Promise<void> {
+		const { dialogs, registry, suspend, postNote } = this.deps;
+		if (run.state !== "running") return dialogs.notify(`${run.id} is ${run.state}, so it cannot be restarted`, "info");
+		const stalled = stallAge(run, this.deps.now());
+		const why = stalled === undefined ? "" : ` Its model request has been in flight for ${formatStall(stalled)}.`;
+		const confirmed = await suspend(() =>
+			dialogs.confirm("Restart subagent", `Restart ${run.agent} ${run.id}?${why} The child is replaced and told to continue.`),
+		);
+		if (!confirmed) return;
+		await registry.restart(run.id, "user");
+		postNote(`User restarted ${run.id}`);
+	}
+
 	private async message(run: Run): Promise<void> {
 		const { dialogs, registry, suspend, postNote } = this.deps;
 		if (run.state !== "running") return dialogs.notify(`${run.id} is ${run.state}, so it cannot be steered`, "info");
@@ -495,6 +508,14 @@ export class RunListView {
 		}
 		return answers;
 	}
+}
+
+/** Render a stall age for a dialog: whole minutes, or seconds under a minute. */
+function formatStall(ms: number): string {
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
 /** Build the stop-all handler. It notifies when no run is running, else confirms by count and stops every running run. */
@@ -639,7 +660,7 @@ async function openRunList(pi: Pick<ExtensionAPI, "sendMessage">, registry: View
 				now: Date.now,
 				rows: () => tui.terminal.rows,
 				highlight: (text) => theme.fg("accent", text),
-				paint: (state, text) => theme.fg(overlayStateColor(state), text),
+				paint: (tone, text) => theme.fg(tone, text),
 				dim: (text) => theme.fg("dim", text),
 				success: (text) => theme.fg("success", text),
 				inverse: (text) => theme.inverse(text),

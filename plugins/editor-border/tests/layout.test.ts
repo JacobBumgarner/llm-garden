@@ -21,18 +21,30 @@ test("badgeText adds a question mark while paused and stays empty at zero", () =
 });
 
 test("parseLive sets the paused flag for a mix of running and paused runs only", () => {
-	const run = (state: string) => ({ id: state, agent: "a", label: "l", state });
-	assert.deepEqual(parseLive({ count: 2, runs: [run("running"), run("paused")] }), { count: 2, paused: true });
-	assert.deepEqual(parseLive({ count: 2, runs: [run("running"), run("queued")] }), { count: 2, paused: false });
-	assert.deepEqual(parseLive({ count: 0, runs: [] }), { count: 0, paused: false });
-	assert.deepEqual(parseLive(undefined), { count: 0, paused: false });
+	const run = (state: string, stalled = false) => ({ id: state, agent: "a", label: "l", state, stalled });
+	assert.deepEqual(parseLive({ count: 2, runs: [run("running"), run("paused")] }), { count: 2, paused: true, stalled: false });
+	assert.deepEqual(parseLive({ count: 2, runs: [run("running"), run("queued")] }), { count: 2, paused: false, stalled: false });
+	assert.deepEqual(parseLive({ count: 0, runs: [] }), { count: 0, paused: false, stalled: false });
+	assert.deepEqual(parseLive(undefined), { count: 0, paused: false, stalled: false });
+});
+
+test("parseLive sets the stalled flag when any run reports it, and tolerates runs without the field", () => {
+	const run = (state: string, stalled?: boolean) => ({ id: state, agent: "a", label: "l", state, ...(stalled === undefined ? {} : { stalled }) });
+	assert.deepEqual(parseLive({ count: 2, runs: [run("running"), run("running", true)] }), { count: 2, paused: false, stalled: true });
+	assert.deepEqual(parseLive({ count: 1, runs: [run("running")] }), { count: 1, paused: false, stalled: false });
+});
+
+test("badgeText adds an exclamation mark while stalled, after the question mark when both apply", () => {
+	assert.equal(badgeText(2, false, true), " 2 λ ! ");
+	assert.equal(badgeText(2, true, true), " 2 λ ?! ");
+	assert.equal(badgeText(0, false, true), "");
 });
 
 const rule = (n: number) => "─".repeat(n);
 
 for (const width of [40, 80, 120]) {
 	test(`the border line at width ${width} puts the badge after the head and truncates the name first`, () => {
-		const { line, badge } = composeTopBorder(rule(width), width, LONG_NAME, { count: 3, paused: false });
+		const { line, badge } = composeTopBorder(rule(width), width, LONG_NAME, { count: 3, paused: false, stalled: false });
 		assert.equal(visibleWidth(line), width);
 		assert.deepEqual(badge, { start: HEAD, end: HEAD + visibleWidth(badgeText(3)) });
 		assert.equal(cols(line, 0, HEAD), rule(HEAD));
@@ -44,24 +56,24 @@ for (const width of [40, 80, 120]) {
 }
 
 test("the span sits at the left for both badge forms", () => {
-	const plain = composeTopBorder(rule(60), 60, "n", { count: 2, paused: false });
+	const plain = composeTopBorder(rule(60), 60, "n", { count: 2, paused: false, stalled: false });
 	assert.deepEqual(plain.badge, { start: 2, end: 7 });
-	const paused = composeTopBorder(rule(60), 60, "n", { count: 2, paused: true });
+	const paused = composeTopBorder(rule(60), 60, "n", { count: 2, paused: true, stalled: false });
 	assert.deepEqual(paused.badge, { start: 2, end: 9 });
 	assert.equal(cols(paused.line, 2, 9), " 2 λ ? ");
 });
 
 test("the line is head, badge, fill, name, tail at exact widths", () => {
 	assert.equal(
-		composeTopBorder(rule(30), 30, "my session", { count: 2, paused: false }).line,
+		composeTopBorder(rule(30), 30, "my session", { count: 2, paused: false, stalled: false }).line,
 		`${rule(2)} 2 λ ${rule(9)} my session ${rule(2)}`,
 	);
 	assert.equal(
-		composeTopBorder(rule(30), 30, undefined, { count: 2, paused: true }).line,
+		composeTopBorder(rule(30), 30, undefined, { count: 2, paused: true, stalled: false }).line,
 		`${rule(2)} 2 λ ? ${rule(21)}`,
 	);
 	assert.equal(
-		composeTopBorder(rule(20), 20, "my session", { count: 1, paused: false }).line,
+		composeTopBorder(rule(20), 20, "my session", { count: 1, paused: false, stalled: false }).line,
 		`${rule(2)} 1 λ ${rule(6)} my… ${rule(2)}`,
 	);
 });
@@ -73,18 +85,18 @@ test("a zero count draws the name alone and no badge span", () => {
 });
 
 test("the badge draws without a name", () => {
-	const alone = composeTopBorder(rule(40), 40, undefined, { count: 1, paused: false });
+	const alone = composeTopBorder(rule(40), 40, undefined, { count: 1, paused: false, stalled: false });
 	assert.deepEqual(alone.badge, { start: HEAD, end: HEAD + 5 });
 	assert.equal(alone.line, `${rule(2)} 1 λ ${rule(33)}`);
 });
 
 test("a narrow border drops the name first and then the badge", () => {
-	const badgeOnly = composeTopBorder(rule(12), 12, "name", { count: 1, paused: false });
+	const badgeOnly = composeTopBorder(rule(12), 12, "name", { count: 1, paused: false, stalled: false });
 	assert.deepEqual(badgeOnly.badge, { start: 2, end: 7 });
 	assert.equal(badgeOnly.line, `${rule(2)} 1 λ ${rule(5)}`);
-	const exact = composeTopBorder(rule(9), 9, "name", { count: 1, paused: false });
+	const exact = composeTopBorder(rule(9), 9, "name", { count: 1, paused: false, stalled: false });
 	assert.equal(exact.line, `${rule(2)} 1 λ ${rule(2)}`);
-	const tooNarrow = composeTopBorder(rule(8), 8, "name", { count: 1, paused: false });
+	const tooNarrow = composeTopBorder(rule(8), 8, "name", { count: 1, paused: false, stalled: false });
 	assert.equal(tooNarrow.badge, undefined);
 	assert.equal(tooNarrow.line, rule(8));
 });
@@ -101,12 +113,12 @@ test("a paused badge takes the warning paint and spans the whole badge", () => {
 	assert.match(line, /^─{2}<w> 1 λ \? <\/w>─+<n> n <\/n><t>──<\/t>$/);
 	assert.ok(badge);
 	assert.equal(badge.end - badge.start, visibleWidth(" 1 λ ? "));
-	const plain = composeTopBorder(rule(40), 40, "n", { count: 1, paused: false });
+	const plain = composeTopBorder(rule(40), 40, "n", { count: 1, paused: false, stalled: false });
 	assert.equal(plain.badge && plain.badge.end - plain.badge.start, visibleWidth(" 1 λ "));
 });
 
 test("paints wrap each segment", () => {
-	const { line } = composeTopBorder(rule(40), 40, "n", { count: 1, paused: false }, TAGS);
+	const { line } = composeTopBorder(rule(40), 40, "n", { count: 1, paused: false, stalled: false }, TAGS);
 	assert.match(line, /^─{2}<b> 1 λ <\/b>─+<n> n <\/n><t>──<\/t>$/);
 });
 

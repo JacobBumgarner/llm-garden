@@ -49,7 +49,7 @@ function pinBorder(editor: CustomEditor, ctx: ExtensionContext): void {
 
 export default function (pi: ExtensionAPI) {
 	let activeTui: TUI | undefined;
-	let live: LiveBadge = { count: 0, paused: false };
+	let live: LiveBadge = { count: 0, paused: false, stalled: false };
 	const escapes = createEscapeTimer(ESCAPE_WINDOW_MS, Date.now);
 
 	const repaint = () => activeTui?.requestRender();

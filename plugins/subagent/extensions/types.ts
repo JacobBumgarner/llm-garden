@@ -86,6 +86,14 @@ export interface Run {
 	usage: UsageStats;
 	lastActivity: number;
 	startedAt: number;
+	/**
+	 * When the child's current model request began: the turn start, or the last
+	 * tool result. Absent while a tool runs or no turn is in flight. A request
+	 * older than `STALL_MS` marks the run stalled.
+	 */
+	modelSince?: number;
+	/** Children replaced during the current turn, by the user or the stall watchdog. */
+	restarts: number;
 	/** The last tool the child finished running. */
 	lastTool?: { name: string; args: Record<string, unknown> };
 	paused?: AskQuestion[];
@@ -106,6 +114,8 @@ export interface RunSnapshot extends SingleResult {
 	state: RunState;
 	background: boolean;
 	lastTool?: { name: string; args: Record<string, unknown> };
+	/** Children replaced during the turn the snapshot covers. */
+	restarts: number;
 }
 
 /** A text block or tool call extracted from an assistant message for display. */

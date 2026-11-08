@@ -8,17 +8,24 @@ import { formatAnswersMessage, PAUSE_NOTICE } from "../../ask/api.ts";
 import type { AgentConfig } from "../extensions/agents.ts";
 import { COALESCE_MS, createCourier } from "../extensions/courier.ts";
 import {
+	AUTO_RESTART_MS,
 	createChildArgs,
 	DONE_IDLE_MS,
+	MAX_AUTO_RESTARTS,
 	MAX_LIVE,
 	MAX_RUNNING,
 	PAUSED_IDLE_MS,
+	requestAge,
+	restartPrompt,
 	type Run,
 	type RunClient,
 	RunRegistry,
 	type RunSpec,
+	STALL_MS,
+	stallAge,
 } from "../extensions/registry.ts";
 import type { DelegateExit, PromptDisposition, QueuedInputDisposition } from "../../shared/rpc.ts";
+import { getFinalOutput } from "../extensions/pause.ts";
 import { readMeta, writeMeta } from "../extensions/session.ts";
 import { buildChildArgs } from "../../shared/spawn.ts";
 
@@ -784,4 +791,144 @@ test("a brief that does not exist fails the start before any child spawns", asyn
 	await assert.rejects(registry.start(spec({ brief: "missing/brief.md" })), /Brief not found: \/work\/missing\/brief\.md/);
 	assert.equal(clients.length, 0);
 	assert.equal(registry.list().length, 0);
+});
+
+test("the request clock starts at the prompt, stops while a tool runs, restarts at the batch's last tool result, and ends with the assistant message", async (t) => {
+	const { registry, spec, clientOf } = setup(t, { mockTime: true });
+	const run = await registry.start(spec({ background: true }));
+	const client = clientOf(run);
+	assert.equal(run.modelSince, Date.now());
+	assert.equal(requestAge(run, Date.now()), 0);
+	t.mock.timers.tick(10_000);
+	client.emit({ type: "tool_execution_start", toolCallId: "a", toolName: "bash", args: {} });
+	client.emit({ type: "tool_execution_start", toolCallId: "b", toolName: "bash", args: {} });
+	assert.equal(run.modelSince, undefined, "no model request runs while a tool does");
+	t.mock.timers.tick(10_000);
+	client.emit({ type: "tool_execution_end", toolCallId: "a", toolName: "bash" });
+	client.emit({ type: "message_end", message: { role: "toolResult", toolCallId: "a", toolName: "bash", content: [], isError: false } });
+	assert.equal(run.modelSince, undefined, "the batch has a tool still running");
+	client.emit({ type: "tool_execution_end", toolCallId: "b", toolName: "bash" });
+	client.emit({ type: "message_end", message: { role: "toolResult", toolCallId: "b", toolName: "bash", content: [], isError: false } });
+	assert.equal(run.modelSince, Date.now());
+	t.mock.timers.tick(30_000);
+	assert.equal(requestAge(run, Date.now()), 30_000);
+	assert.equal(stallAge(run, Date.now()), undefined, "under the stall mark");
+	client.emit({ type: "message_end", message: reply("done") });
+	assert.equal(run.modelSince, undefined);
+	assert.equal(requestAge(run, Date.now()), undefined);
+});
+
+test("a model request past the stall mark emits a change, and the run reads as stalled until the reply lands", async (t) => {
+	const { registry, spec, clientOf, changes } = setup(t, { mockTime: true });
+	const run = await registry.start(spec({ background: true }));
+	const before = changes.length;
+	t.mock.timers.tick(STALL_MS - 1);
+	assert.equal(changes.length, before);
+	assert.equal(stallAge(run, Date.now()), undefined);
+	t.mock.timers.tick(1);
+	assert.equal(changes.length, before + 1);
+	assert.deepEqual(changes.at(-1), { id: run.id, state: "running", delivered: false });
+	assert.equal(stallAge(run, Date.now()), STALL_MS);
+	clientOf(run).turn(reply("finally"));
+	assert.equal(run.state, "done");
+	assert.equal(stallAge(run, Date.now()), undefined);
+});
+
+test("the watchdog restarts a stalled child on its session with a continuation prompt, keeping the run running and its wait pending", async (t) => {
+	const { registry, spec, clients, clientOf } = setup(t, { mockTime: true });
+	const run = await registry.start(spec());
+	const first = clientOf(run);
+	const waiting = registry.wait([run.id]);
+	t.mock.timers.tick(AUTO_RESTART_MS);
+	await flush();
+	assert.equal(first.stopped, true);
+	assert.equal(clients.length, 2);
+	const second = clients[1];
+	assert.notEqual(second, first);
+	assert.deepEqual(second.args.slice(second.args.indexOf("--session-id"), second.args.indexOf("--session-id") + 2), ["--session-id", run.id]);
+	assert.deepEqual(second.prompts, [restartPrompt("stall")]);
+	assert.match(second.prompts[0], /stalled for over 5 minutes/);
+	assert.equal(run.state, "running");
+	assert.equal(run.client, second);
+	assert.equal(run.restarts, 1);
+	assert.equal(run.waiters, 1);
+	assert.equal(run.modelSince, Date.now(), "the new child's request starts now");
+	first.turn(user("late"), reply("ignored"));
+	assert.equal(run.state, "running", "the replaced child's events are dropped");
+	second.turn(reply("finished"));
+	const [result] = await waiting;
+	assert.equal(result.state, "done");
+	assert.equal(getFinalOutput(run.messages), "finished");
+});
+
+test("after the automatic restarts are spent the watchdog fails the run and stops its child", async (t) => {
+	const { registry, spec, clients } = setup(t, { mockTime: true });
+	const run = await registry.start(spec({ background: true }));
+	for (let i = 0; i < MAX_AUTO_RESTARTS; i++) {
+		t.mock.timers.tick(AUTO_RESTART_MS);
+		await flush();
+		assert.equal(run.state, "running");
+		assert.equal(run.restarts, i + 1);
+	}
+	assert.equal(clients.length, MAX_AUTO_RESTARTS + 1);
+	const last = clients.at(-1) as FakeClient;
+	t.mock.timers.tick(AUTO_RESTART_MS);
+	await flush();
+	assert.equal(run.state, "failed");
+	assert.match(run.errorMessage ?? "", /stalled for over 5 minutes, after 2 automatic restarts/);
+	assert.equal(last.stopped, true);
+	assert.equal(clients.length, MAX_AUTO_RESTARTS + 1, "no further child is launched");
+	assert.equal(run.client, undefined);
+});
+
+test("a user restart replaces the child, counts against the turn, does not count as automatic, and the count resets with the next turn", async (t) => {
+	const { registry, spec, clients, clientOf } = setup(t, { mockTime: true });
+	const run = await registry.start(spec({ background: true }));
+	const first = clientOf(run);
+	const returned = await registry.restart(run.id, "user");
+	assert.equal(returned, run);
+	assert.equal(first.stopped, true);
+	assert.equal(clients.length, 2);
+	assert.deepEqual(clients[1].prompts, [restartPrompt("user")]);
+	assert.match(clients[1].prompts[0], /the user asked for a restart/);
+	assert.equal(run.restarts, 1);
+	for (let i = 0; i < MAX_AUTO_RESTARTS; i++) {
+		t.mock.timers.tick(AUTO_RESTART_MS);
+		await flush();
+	}
+	assert.equal(run.state, "running", "user restarts do not spend the automatic budget");
+	assert.equal(run.restarts, 1 + MAX_AUTO_RESTARTS);
+	(clients.at(-1) as FakeClient).turn(reply("finished"));
+	assert.equal(run.state, "done");
+	await registry.resume(run.id, { task: "more" });
+	assert.equal(run.restarts, 0);
+});
+
+test("restart rejects for a run that is not running and for one whose child is still starting", async (t) => {
+	const { registry, spec, clientOf } = setup(t);
+	const run = await registry.start(spec({ background: true }));
+	clientOf(run).turn(reply("finished"));
+	await assert.rejects(registry.restart(run.id, "user"), /is done, not running/);
+	await assert.rejects(registry.restart("sub-nope", "user"), /Unknown subagent session/);
+});
+
+test("stopping a run disarms its stall watchdog", async (t) => {
+	const { registry, spec, clients } = setup(t, { mockTime: true });
+	const run = await registry.start(spec({ background: true }));
+	await registry.stop(run.id);
+	assert.equal(run.modelSince, undefined);
+	t.mock.timers.tick(AUTO_RESTART_MS * 2);
+	await flush();
+	assert.equal(clients.length, 1);
+	assert.equal(run.state, "stopped");
+});
+
+test("a child's retry restarts the request clock", async (t) => {
+	const { registry, spec, clientOf } = setup(t, { mockTime: true });
+	const run = await registry.start(spec({ background: true }));
+	t.mock.timers.tick(STALL_MS - 1);
+	clientOf(run).emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: "overloaded" });
+	assert.equal(run.modelSince, Date.now());
+	t.mock.timers.tick(STALL_MS - 1);
+	assert.equal(stallAge(run, Date.now()), undefined);
 });

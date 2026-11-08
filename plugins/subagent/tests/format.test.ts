@@ -15,6 +15,7 @@ import {
 	layoutOverlay,
 	overlayRowWidth,
 	overlayStateColor,
+	overlayTone,
 	formatProgressLine,
 	formatRunResult,
 	formatSessionFooter,
@@ -154,6 +155,7 @@ const run = (overrides: Partial<Run> = {}): Run => ({
 	usage: { ...usage, turns: 3, input: 12000, output: 2100 },
 	lastActivity: 1_000_000,
 	startedAt: 900_000,
+	restarts: 0,
 	stderr: "",
 	waiters: 0,
 	...overrides,
@@ -235,6 +237,23 @@ test("formatWaitSections separates sections and reports an empty wait", () => {
 	const both = formatWaitSections([snapshotRun(run(), true), snapshotRun(run({ id: "sub-2", state: "running" }), true)]);
 	assert.match(both, /\n\n---\n\n### sub-2 \[glm\] running · Say pong\n\nstatus: running/);
 	assert.equal(formatWaitSections([]), "No live subagent runs to wait on.");
+});
+
+test("formatStatusLine notes a stalled request and the turn's restarts", () => {
+	const stalled = run({ state: "running", modelSince: 1_014_000 - 125_000, restarts: 1 });
+	assert.equal(formatStatusLine(stalled, 1_014_000), 'sub-abc12345 [glm] running (stalled 2m) · 3 turns ↑12k ↓2.1k · 1 restart · 14s ago · Say pong');
+	const fresh = run({ state: "running", modelSince: 1_014_000 - 5_000, restarts: 2 });
+	assert.equal(formatStatusLine(fresh, 1_014_000), 'sub-abc12345 [glm] running · 3 turns ↑12k ↓2.1k · 2 restarts · 14s ago · Say pong');
+});
+
+test("formatOverlayRow opens a stalled running row with the stall word, painted warning with the icon, and appends the restarts", () => {
+	const stalled = liveRun({ modelSince: NOW - 130_000, restarts: 1 });
+	const row = formatOverlayRow(stalled, NOW, 80, bracket);
+	assert.match(row, /^<▶> glm sub-bddd {2}Say pong {2}<stalled 2m> {2}11 turns ↑20 ↓19k {2}1 restart +30s ago$/);
+	assert.equal(row.replace(/[<>]/g, "").length, 80);
+	assert.equal(overlayTone(stalled, NOW), "warning");
+	assert.equal(overlayTone(liveRun({ modelSince: NOW - 1_000 }), NOW), "accent");
+	assert.equal(overlayTone(liveRun({ state: "done", modelSince: NOW - 130_000 }), NOW), "success");
 });
 
 test("formatStatusLine shows id, agent, state, turns, tokens, age, and the label", () => {

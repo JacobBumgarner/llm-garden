@@ -3,7 +3,10 @@
  * run's state from its Delegate client's events, decides at each settle whether
  * a pending `wait` or the undelivered set gets the result, enforces the running
  * and live-child caps, retires idle children, respawns retired ones on their
- * session file, and emits a change event. Imports types only from pi packages.
+ * session file, and emits a change event. A stall watchdog marks a run whose
+ * model request has run for `STALL_MS`, restarts its child on the same session
+ * file at `AUTO_RESTART_MS`, and fails the run after `MAX_AUTO_RESTARTS` such
+ * restarts in one turn. Imports types only from pi packages.
  */
 
 import * as fs from "node:fs";
@@ -19,9 +22,11 @@ import { DelegateClient, type DelegateExit } from "../../shared/rpc.ts";
 import { newSessionId, readMeta, writeMeta } from "./session.ts";
 import { buildChildArgs, writePromptToTempFile } from "../../shared/spawn.ts";
 import { SUBAGENT_PROTOCOL } from "./spawn.ts";
+import { AUTO_RESTART_MS, MAX_AUTO_RESTARTS, requestAge, type RestartReason, restartPrompt, STALL_MS } from "./stall.ts";
 import type { Run, RunClient, UsageStats } from "./types.ts";
 
 export type { Run, RunClient, RunState } from "./types.ts";
+export { AUTO_RESTART_MS, MAX_AUTO_RESTARTS, requestAge, type RestartReason, restartPrompt, STALL_MS, stallAge } from "./stall.ts";
 
 export const MAX_RUNNING = 6;
 export const MAX_LIVE = 8;
@@ -122,6 +127,10 @@ interface Entry {
 	/** A launch is building the client, so the run holds a live slot without one. */
 	reserved: boolean;
 	idleTimer?: ReturnType<typeof setTimeout>;
+	/** Fires at `STALL_MS` to mark the run, then at `AUTO_RESTART_MS` to restart it. */
+	stallTimer?: ReturnType<typeof setTimeout>;
+	/** Restarts the watchdog made this turn, against `MAX_AUTO_RESTARTS`. */
+	autoRestarts: number;
 	unsubscribe?: () => void;
 	toolArgs: Map<string, Record<string, unknown>>;
 }
@@ -182,6 +191,7 @@ export function isLive(run: Run): boolean {
 function isIdleSettled(run: Run): boolean {
 	return run.state === "done" || run.state === "failed";
 }
+
 
 /** Return the last assistant message in a list, if any. */
 function lastAssistant(messages: Message[]): AssistantMessage | undefined {
@@ -298,6 +308,36 @@ export class RunRegistry {
 		const client = run.client;
 		if (!client) throw new Error(`Subagent ${id} is still starting. Send again once it is running.`);
 		return mode === "follow_up" ? client.followUp(text) : client.steer(text);
+	}
+
+	/**
+	 * Replace a running run's child: stop it, wait for it to exit so the session
+	 * file is settled, launch a new child on that file, and prompt it to continue.
+	 * The run stays running through the swap, so a pending wait on it holds and
+	 * its turn settles once the new child finishes. Rejects for a run that is not
+	 * running or whose child is still starting.
+	 */
+	async restart(id: string, reason: RestartReason): Promise<Run> {
+		this.assertOpen();
+		const entry = this.requireEntry(id);
+		const { run } = entry;
+		if (run.state !== "running") {
+			throw new Error(`Subagent ${id} is ${run.state}, not running. Only a running subagent can be restarted; use resume to continue a finished one.`);
+		}
+		const client = run.client;
+		if (!client) throw new Error(`Subagent ${id} is still starting. Restart it once it is running.`);
+		this.dropClient(entry);
+		entry.reserved = true;
+		entry.toolArgs.clear();
+		run.restarts += 1;
+		if (reason === "stall") entry.autoRestarts += 1;
+		run.stderr = client.stderr;
+		this.beginRequest(entry);
+		this.emit(run);
+		await client.stop().catch(() => {});
+		if (this.closed || !entry.reserved) return run;
+		await this.launch(entry, restartPrompt(reason));
+		return run;
 	}
 
 	/**
@@ -483,6 +523,7 @@ export class RunRegistry {
 				usage: emptyUsage(),
 				lastActivity: now,
 				startedAt: now,
+				restarts: 0,
 				stderr: "",
 				waiters: 0,
 			},
@@ -491,6 +532,7 @@ export class RunRegistry {
 			brief: spec.brief,
 			dispatch: spec.dispatch,
 			reserved: false,
+			autoRestarts: 0,
 			toolArgs: new Map(),
 		};
 	}
@@ -570,6 +612,7 @@ export class RunRegistry {
 		entry.unsubscribe = undefined;
 		entry.run.client = undefined;
 		this.clearIdle(entry);
+		this.endRequest(entry);
 	}
 
 	private enqueue(entry: Entry, prompt: string): void {
@@ -622,9 +665,70 @@ export class RunRegistry {
 		run.paused = undefined;
 		run.errorMessage = undefined;
 		run.stopReason = undefined;
+		run.restarts = 0;
+		entry.autoRestarts = 0;
 		run.lastActivity = this.now();
 		this.clearIdle(entry);
+		this.beginRequest(entry);
 		this.emit(run);
+	}
+
+	/** Note that a model request starts now and arm the stall watchdog for it. */
+	private beginRequest(entry: Entry): void {
+		entry.run.modelSince = this.now();
+		this.scheduleStall(entry);
+	}
+
+	/** Note that no model request is in flight and disarm the stall watchdog. */
+	private endRequest(entry: Entry): void {
+		entry.run.modelSince = undefined;
+		this.clearStall(entry);
+	}
+
+	/** Arm the watchdog for the next threshold the current request has not reached: the stall mark, then the restart. */
+	private scheduleStall(entry: Entry): void {
+		this.clearStall(entry);
+		const age = requestAge(entry.run, this.now());
+		if (age === undefined) return;
+		const next = age < STALL_MS ? STALL_MS : AUTO_RESTART_MS;
+		if (age >= next) return;
+		entry.stallTimer = setTimeout(() => this.onStall(entry), next - age);
+		entry.stallTimer.unref?.();
+	}
+
+	/** At the stall mark, emit so the run paints stalled. At the restart mark, replace the child, or fail the run once the restarts are spent. */
+	private onStall(entry: Entry): void {
+		entry.stallTimer = undefined;
+		const { run } = entry;
+		const age = requestAge(run, this.now());
+		if (this.closed || age === undefined) return;
+		if (age < AUTO_RESTART_MS) {
+			this.emit(run);
+			this.scheduleStall(entry);
+			return;
+		}
+		if (entry.autoRestarts < MAX_AUTO_RESTARTS && run.client) {
+			void this.restart(run.id, "stall").catch(() => {});
+			return;
+		}
+		const minutes = Math.round(AUTO_RESTART_MS / 60_000);
+		const count = entry.autoRestarts;
+		void this.abandon(entry, `Model request stalled for over ${minutes} minutes, after ${count} automatic restart${count === 1 ? "" : "s"}`);
+	}
+
+	/** Stop a running run's child and mark the run failed with `reason`. */
+	private async abandon(entry: Entry, reason: string): Promise<void> {
+		const client = entry.run.client;
+		if (client) entry.run.stderr = client.stderr;
+		this.dropClient(entry);
+		entry.reserved = false;
+		this.fail(entry, reason);
+		await client?.stop().catch(() => {});
+	}
+
+	private clearStall(entry: Entry): void {
+		if (entry.stallTimer) clearTimeout(entry.stallTimer);
+		entry.stallTimer = undefined;
 	}
 
 	/** Begin a turn on a run that has no client yet and hold a live slot for it. */
@@ -722,11 +826,17 @@ export class RunRegistry {
 			case "message_end":
 				if (ev.message) {
 					this.recordMessage(run, ev.message as Message);
+					this.trackRequest(entry, ev.message as Message);
 					this.emit(run);
 				}
 				break;
+			case "auto_retry_start":
+				// The child retries a failed request after a delay. The request clock restarts here.
+				if (run.state === "running") this.beginRequest(entry);
+				break;
 			case "tool_execution_start":
 				entry.toolArgs.set(ev.toolCallId, ev.args ?? {});
+				this.endRequest(entry);
 				break;
 			case "tool_execution_end":
 				run.lastTool = { name: ev.toolName, args: entry.toolArgs.get(ev.toolCallId) ?? {} };
@@ -737,6 +847,13 @@ export class RunRegistry {
 				if (run.state === "running") this.settle(entry);
 				break;
 		}
+	}
+
+	/** Move the request clock with the turn: the last tool result of a batch starts the next model request, an assistant message ends one. */
+	private trackRequest(entry: Entry, msg: Message): void {
+		if (entry.run.state !== "running") return;
+		if (msg.role === "toolResult" && entry.toolArgs.size === 0) this.beginRequest(entry);
+		else if (msg.role === "assistant") this.endRequest(entry);
 	}
 
 	/** Append a completed message and add an assistant message's usage to the run. */
@@ -780,6 +897,7 @@ export class RunRegistry {
 		const { run } = entry;
 		const turn = run.messages.slice(run.turnStart);
 		const last = lastAssistant(turn);
+		this.endRequest(entry);
 		let questions: AskQuestion[] | undefined;
 		if (last && (last.stopReason === "error" || last.stopReason === "aborted")) {
 			run.state = "failed";
@@ -799,6 +917,7 @@ export class RunRegistry {
 		const { run } = entry;
 		if (this.closed || !isActive(run)) return;
 		this.unqueue(run.id);
+		this.endRequest(entry);
 		run.state = "failed";
 		run.errorMessage = reason;
 		this.finishTurn(entry);

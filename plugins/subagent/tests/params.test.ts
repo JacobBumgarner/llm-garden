@@ -153,6 +153,9 @@ test("stop takes an id and nothing else", () => {
 	assert.deepEqual(ok({ action: "stop", id: "sub-1" }), { action: "stop", id: "sub-1" });
 	assert.match(error({ action: "stop" }), /^action "stop" takes id\. Missing id\.$/);
 	assert.match(error({ action: "stop", ids: ["sub-1"] }), /ids is not accepted\. Did you mean action "wait"\?/);
+	assert.deepEqual(ok({ action: "restart", id: "sub-1" }), { action: "restart", id: "sub-1" });
+	assert.match(error({ action: "restart" }), /^action "restart" takes id\. Missing id\.$/);
+	assert.match(error({ action: "restart", id: "sub-1", task: "x" }), /task is not accepted\. Did you mean action "resume"\?/);
 });
 
 test("resume takes an id with answers or with a task", () => {
@@ -201,7 +204,7 @@ test("several stray fields are listed together", () => {
 });
 
 test("an unknown or missing action lists the actions", () => {
-	const expected = 'action must be one of "start", "status", "wait", "send", "stop", "resume".';
+	const expected = 'action must be one of "start", "status", "wait", "send", "stop", "restart", "resume".';
 	assert.equal(error({ action: "run" }), expected);
 	assert.equal(error({ agent: "a", task: "x" }), expected);
 });

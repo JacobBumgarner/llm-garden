@@ -1,8 +1,8 @@
 /**
  * Layout of the editor's top border: the running-subagent badge at the left
  * end, the session name at the right end, the badge's column span for click
- * hit testing, and the reading of the `subagent:live` payload into a count and
- * a paused flag. Pure, so the layout runs without a terminal.
+ * hit testing, and the reading of the `subagent:live` payload into a count, a
+ * paused flag, and a stalled flag. Pure, so the layout runs without a terminal.
  */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -29,9 +29,11 @@ export interface LiveBadge {
 	count: number;
 	/** True while any run waits for an answer. */
 	paused: boolean;
+	/** True while any run's model request has stalled. */
+	stalled: boolean;
 }
 
-/** Styles for the segments of the composed border. `warning` paints a badge with a paused run. */
+/** Styles for the segments of the composed border. `warning` paints a badge with a paused or stalled run. */
 export interface TopBorderPaints {
 	badge: Paint;
 	warning: Paint;
@@ -53,22 +55,25 @@ const PLAIN: TopBorderPaints = {
 	border: (text) => text,
 };
 
-/** Read a `subagent:live` payload into a count and a paused flag, tolerating malformed data. */
+/** Read a `subagent:live` payload into a count, a paused flag, and a stalled flag, tolerating malformed data. */
 export function parseLive(data: unknown): LiveBadge {
 	const { count, runs } = (data ?? {}) as { count?: unknown; runs?: unknown };
-	const paused = Array.isArray(runs) && runs.some((run) => (run as { state?: unknown } | null)?.state === "paused");
-	return { count: typeof count === "number" && count > 0 ? count : 0, paused };
+	const list = Array.isArray(runs) ? (runs as ({ state?: unknown; stalled?: unknown } | null)[]) : [];
+	const paused = list.some((run) => run?.state === "paused");
+	const stalled = list.some((run) => run?.stalled === true);
+	return { count: typeof count === "number" && count > 0 ? count : 0, paused, stalled };
 }
 
-/** Return the badge text for a count of live runs with a `?` while one is paused, or an empty string at zero. */
-export function badgeText(count: number, paused = false): string {
+/** Return the badge text for a count of live runs with a `?` while one is paused and a `!` while one is stalled, or an empty string at zero. */
+export function badgeText(count: number, paused = false, stalled = false): string {
 	if (count <= 0) return "";
-	return ` ${count} λ ${paused ? "? " : ""}`;
+	const marks = `${paused ? "?" : ""}${stalled ? "!" : ""}`;
+	return ` ${count} λ ${marks ? `${marks} ` : ""}`;
 }
 
-/** Pick the badge paint, `warning` while a run is paused. */
+/** Pick the badge paint, `warning` while a run is paused or stalled. */
 function badgePaint(live: LiveBadge, paints: TopBorderPaints): Paint {
-	return live.paused ? paints.warning : paints.badge;
+	return live.paused || live.stalled ? paints.warning : paints.badge;
 }
 
 /** The columns the badge takes on a row, zero when dropped, and the columns left for the name text. */
@@ -97,7 +102,7 @@ function budget(badge: string, width: number): Budget {
  * The name truncates to the room left after the head, badge, `MIN_GAP`, and
  * tail, and is dropped when none is left. The badge is dropped when the head,
  * badge, and tail do not fit. Without a badge the row is border fill, the
- * name, and the tail. The badge takes the `warning` paint while `paused` is set.
+ * name, and the tail. The badge takes the `warning` paint while `paused` or `stalled` is set.
  */
 export function composeTopBorder(
 	base: string,
@@ -106,7 +111,7 @@ export function composeTopBorder(
 	live: LiveBadge,
 	paints: TopBorderPaints = PLAIN,
 ): TopBorder {
-	const badge = badgeText(live.count, live.paused);
+	const badge = badgeText(live.count, live.paused, live.stalled);
 	const { badgeWidth, nameRoom } = budget(badge, width);
 	const label = name && nameRoom >= 1 ? ` ${truncateToWidth(name, nameRoom, "…")} ` : "";
 	if (badgeWidth === 0 && label === "") return { line: base, badge: undefined };

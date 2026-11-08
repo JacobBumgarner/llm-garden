@@ -12,6 +12,8 @@
  *     and returns one section per run.
  *   - send: `{ id, message, mode? }` steers a running delegate or queues a follow-up.
  *   - stop: `{ id }` aborts a delegate, or returns the result of one that already finished.
+ *   - restart: `{ id }` replaces a running delegate's child with a fresh one on the same
+ *     session file and tells it to continue, for a child whose model requests have stalled.
  *   - resume: `{ id, answers }` answers a paused run, `{ id, task, label? }` sends
  *     follow-up work into a finished run's context. Blocks for the reply, or
  *     with `background: true` returns `status: started` at once.
@@ -29,10 +31,12 @@
  * last resumed the run, for the focus-mode actions panel to nest. Inside a cmux workspace, a progress reporter mirrors the
  * live runs onto the workspace progress bar (`done/total agents`) and clears
  * it when none is left. A live view publishes the queued, running, and paused
- * runs on `pi.events` as `subagent:live`, `/subagents` opens a bordered
+ * runs on `pi.events` as `subagent:live`, each flagged when stalled, `/subagents` opens a bordered
  * overlay that lists running runs above finished ones with keys to stop,
- * steer, or answer the selected one, or open the focus-mode actions panel
- * over its tool calls, and `alt+a` opens that overlay.
+ * restart, steer, or answer the selected one, or open the focus-mode actions panel
+ * over its tool calls, and `alt+a` opens that overlay. The registry's stall
+ * watchdog marks a run whose model request has run two minutes, restarts its
+ * child at five, and fails the run after two such restarts in one turn.
  * `/subagents stop`, the overlay `s` key, and a double Esc stop every running
  * run after a confirm. Each call line names the action, agent, and label, and
  * a foreground call streams turns, tokens, and the last tool call under it. Sessions persist under `PI_SUBAGENT_SESSION_DIR` (default
@@ -89,7 +93,7 @@ const MAX_START_TASKS = 8;
 
 const SESSION_DIR = resolveSessionDir(getAgentDir());
 
-type View = "results" | "started" | "detached" | "status" | "send" | "stop" | "error";
+type View = "results" | "started" | "detached" | "status" | "send" | "stop" | "restart" | "error";
 type SubagentArgs = Static<typeof SubagentParams>;
 type RequestOf<A extends Action> = Extract<SubagentRequest, { action: A }>;
 type ResolvedTask = { task: StartTask; agent: AgentConfig; brief?: BriefConfig };
@@ -145,7 +149,7 @@ const TaskItem = Type.Object({
 
 const SubagentParams = Type.Object({
 	label: Type.Optional(Type.String({ description: LABEL_DESCRIPTION })),
-	action: StringEnum(["start", "status", "wait", "send", "stop", "resume"] as const, {
+	action: StringEnum(["start", "status", "wait", "send", "stop", "restart", "resume"] as const, {
 		description: "What to do. Each action accepts only its own fields.",
 	}),
 	agent: Type.Optional(Type.String({ description: `start: ${AGENT_DESCRIPTION}` })),
@@ -170,7 +174,7 @@ const SubagentParams = Type.Object({
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "start: prompt before running project-local agents. Default true." }),
 	),
-	id: Type.Optional(Type.String({ description: "send, stop, resume: the session_id of a run" })),
+	id: Type.Optional(Type.String({ description: "send, stop, restart, resume: the session_id of a run" })),
 	ids: Type.Optional(Type.Array(Type.String(), { description: "wait: session ids. Omitted means every live run." })),
 	timeout_s: Type.Optional(Type.Number({ description: "wait: give up after this many seconds. Default none." })),
 	message: Type.Optional(Type.String({ description: "send: the message for a running delegate" })),
@@ -386,6 +390,13 @@ function finishedStopResult(registry: RunRegistry, run: Run): ToolResult {
 	return resultsView("stop", [run], false);
 }
 
+/** Replace a running delegate's child. The run stays running, so whatever wait or courier owns its result keeps it. */
+async function handleRestart(request: RequestOf<"restart">, call: Call): Promise<ToolResult> {
+	const run = await call.registry.restart(request.id, "user");
+	const count = run.restarts;
+	return textResult("restart", "restart", `restarted ${request.id} (${count} restart${count === 1 ? "" : "s"} this turn); it continues on its session`);
+}
+
 /**
  * Answer a paused run or send follow-up work into a finished one, then block
  * for the result. With `background: true` in a mode that allows it, return the
@@ -414,6 +425,8 @@ function dispatchRequest(request: SubagentRequest, call: Call): Promise<ToolResu
 			return handleSend(request, call);
 		case "stop":
 			return handleStop(request, call);
+		case "restart":
+			return handleRestart(request, call);
 		case "resume":
 			return handleResume(request, call);
 	}
@@ -701,7 +714,7 @@ export default function (pi: ExtensionAPI) {
 			"Delegate tasks to specialized subagents with isolated context. `action` selects the operation and each action accepts only its own fields.",
 			"start: { label, agent, task } or { tasks: [{ label, agent, task }] } runs delegates and returns their results. With background: true it returns status started and a session_id at once, and the delegate keeps working.",
 			"status: lists every run in this session. wait: { ids?, timeout_s? } blocks until the runs settle and returns their results.",
-			"send: { id, message, mode? } messages a running delegate. stop: { id } aborts one.",
+			"send: { id, message, mode? } messages a running delegate. stop: { id } aborts one. restart: { id } replaces a running delegate's child on the same session and tells it to continue; use it when status shows the run stalled.",
 			'Every result ends with a session_id. To continue a finished subagent with more work in the same context, call { action: "resume", id, task, label? }. Prefer that over a fresh run that would have to rediscover everything.',
 			"A subagent that needs a decision pauses: the result reads `status: paused` with its questions and a resume_id.",
 			'Answer from your own context, or ask the user first, then call { action: "resume", id, answers }.',

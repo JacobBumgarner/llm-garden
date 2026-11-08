@@ -12,6 +12,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { formatQuestionsForOrchestrator } from "../../ask/api.ts";
 import type { DetachReason } from "./blocked.ts";
 import { getFinalOutput } from "./pause.ts";
+import { stallAge } from "./stall.ts";
 import type { DisplayItem, PausedRun, Run, RunSnapshot, SingleResult, UsageStats } from "./types.ts";
 
 export const PER_TASK_OUTPUT_CAP = 50 * 1024;
@@ -210,6 +211,7 @@ export function snapshotRun(run: Run, withMessages: boolean): RunSnapshot {
 		errorMessage: run.errorMessage,
 		paused: run.state === "paused" ? (run.paused ?? []) : undefined,
 		lastTool: run.lastTool,
+		restarts: run.restarts,
 	};
 }
 
@@ -302,11 +304,25 @@ function formatTurnsAndTokens(usage: Pick<UsageStats, "turns" | "input" | "outpu
 	return `${turns} turn${turns === 1 ? "" : "s"} ↑${formatTokens(input)} ↓${formatTokens(output)}`;
 }
 
-/** Render one status line: id, agent, state, turns, tokens, age of last activity, and label. */
+/** The stall note for a running run: `stalled 3m` once its model request passes the stall mark, else nothing. */
+function stallNote(run: Run, now: number): string {
+	const age = stallAge(run, now);
+	return age === undefined ? "" : `stalled ${formatAge(age)}`;
+}
+
+/** The restart note for a run whose child was replaced this turn: `1 restart`, `2 restarts`, else nothing. */
+function restartNote(run: Pick<Run, "restarts">): string {
+	if (!run.restarts) return "";
+	return `${run.restarts} restart${run.restarts === 1 ? "" : "s"}`;
+}
+
+/** Render one status line: id, agent, state with any stall, turns, tokens, restarts, age of last activity, and label. */
 export function formatStatusLine(run: Run, now: number): string {
+	const stall = stallNote(run, now);
 	return [
-		`${run.id} [${run.agent}] ${run.state}`,
+		`${run.id} [${run.agent}] ${run.state}${stall ? ` (${stall})` : ""}`,
 		formatTurnsAndTokens(run.usage),
+		...(run.restarts ? [restartNote(run)] : []),
 		`${formatAge(now - run.lastActivity)} ago`,
 		run.label,
 	].join(" · ");
@@ -332,24 +348,33 @@ const OVERLAY_ICONS: Record<Run["state"], string> = {
 	stopped: "■",
 };
 
-/** Return the state word that opens an overlay row's detail: the state name, or nothing for a running run. */
-function stateWord(run: Run): string {
-	return run.state === "running" ? "" : run.state;
+/** Return the state word that opens an overlay row's detail: the state name, `stalled 3m` for a stalled running run, or nothing for a running run. */
+function stateWord(run: Run, now: number): string {
+	return run.state === "running" ? stallNote(run, now) : run.state;
 }
 
 /** Render the state-dependent middle of an overlay row, opening with its state word. */
-function overlayDetail(run: Run): string {
-	if (run.state === "running") return formatProgressLine(run).replace(" · ", "  ");
-	if (run.state !== "paused") return stateWord(run);
+function overlayDetail(run: Run, now: number): string {
+	if (run.state === "running") {
+		const word = stateWord(run, now);
+		const parts = [formatProgressLine(run).replace(" · ", "  "), restartNote(run)].filter(Boolean);
+		return word ? `${word}  ${parts.join("  ")}` : parts.join("  ");
+	}
+	if (run.state !== "paused") return stateWord(run, now);
 	const count = run.paused?.length ?? 0;
-	return `${stateWord(run)}: ${count} question${count === 1 ? "" : "s"}`;
+	return `${stateWord(run, now)}: ${count} question${count === 1 ? "" : "s"}`;
 }
 
 /** The theme color names the overlay paints states with. */
 export type OverlayColor = "accent" | "warning" | "success" | "error" | "muted";
 
-/** Wrap `text` in the color of `state`. */
-export type OverlayPaint = (state: Run["state"], text: string) => string;
+/** Wrap `text` in the color of a run's tone. */
+export type OverlayPaint = (tone: OverlayColor, text: string) => string;
+
+/** Return the color a run paints with: its state color, or warning for a stalled running run. */
+export function overlayTone(run: Run, now: number): OverlayColor {
+	return stallAge(run, now) !== undefined ? "warning" : overlayStateColor(run.state);
+}
 
 /** Return the theme color of a run state: accent for queued and running, warning for paused, success for done, error for failed, muted for stopped. */
 export function overlayStateColor(state: Run["state"]): OverlayColor {
@@ -374,15 +399,15 @@ export function overlayStateColor(state: Run["state"]): OverlayColor {
  * activity one space after the detail, or at the right edge when `width` leaves
  * room. Nothing is cut. `paint` wraps the icon and the state word of the detail
  * after the row is laid out on plain text, so the visible width does not change.
- * A running row has no state word, so only its icon is painted.
+ * A running row has no state word unless it is stalled, so only its icon is painted.
  */
 export function formatOverlayRow(run: Run, now: number, width: number, paint?: OverlayPaint): string {
 	const age = overlayAge(run, now);
 	const head = overlayHead(run);
-	const chars = [...`${head}${overlayDetail(run)}`];
+	const chars = [...`${head}${overlayDetail(run, now)}`];
 	const gap = Math.max(1, width - chars.length - age.length);
-	const word = { start: [...head].length, length: stateWord(run).length };
-	const colored = paint ? paintSegments(run.state, chars, word, paint) : chars.join("");
+	const word = { start: [...head].length, length: stateWord(run, now).length };
+	const colored = paint ? paintSegments(overlayTone(run, now), chars, word, paint) : chars.join("");
 	return `${colored}${" ".repeat(gap)}${age}`;
 }
 
@@ -396,16 +421,16 @@ function overlayHead(run: Run): string {
 
 /** Return the width at which `formatOverlayRow` shows the whole row with one space before the age: the width a pan can reveal. */
 export function overlayRowWidth(run: Run, now: number): number {
-	return [...`${overlayHead(run)}${overlayDetail(run)}`].length + 1 + overlayAge(run, now).length;
+	return [...`${overlayHead(run)}${overlayDetail(run, now)}`].length + 1 + overlayAge(run, now).length;
 }
 
 /** Join the fitted row characters, painting the first one and the `word` span, cut to what fits. */
-function paintSegments(state: Run["state"], chars: string[], word: { start: number; length: number }, paint: OverlayPaint): string {
+function paintSegments(tone: OverlayColor, chars: string[], word: { start: number; length: number }, paint: OverlayPaint): string {
 	const wordEnd = Math.min(word.start + word.length, chars.length);
-	const icon = paint(state, chars[0] ?? "");
+	const icon = paint(tone, chars[0] ?? "");
 	const middle = chars.slice(1, word.start).join("");
 	const painted = chars.slice(word.start, wordEnd).join("");
-	return `${icon}${middle}${painted ? paint(state, painted) : ""}${chars.slice(wordEnd).join("")}`;
+	return `${icon}${middle}${painted ? paint(tone, painted) : ""}${chars.slice(wordEnd).join("")}`;
 }
 
 /** Return the runs newest first. */
@@ -487,6 +512,8 @@ export function formatCallLine(args: CallLineArgs, options: { expanded?: boolean
 			return `subagent send ${args.id ?? "..."} · ${args.mode ?? "steer"}`;
 		case "stop":
 			return `subagent stop ${args.id ?? "..."}`;
+		case "restart":
+			return `subagent restart ${args.id ?? "..."}`;
 		case "resume": {
 			const answered = Object.keys(args.answers ?? {}).length;
 			const detail = answered > 0 ? ` · answers (${answered})` : labelSuffix(labelOrPreview(args.label, args.task ?? ""));

@@ -32,6 +32,7 @@ function makeRun(overrides: Partial<Run> = {}): Run {
 		usage: { input: 12_000, output: 2_000, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 3 },
 		lastActivity: NOW - 14_000,
 		startedAt: NOW - 60_000,
+		restarts: 0,
 		stderr: "",
 		waiters: 0,
 		...overrides,
@@ -70,6 +71,11 @@ class FakeRegistry implements ViewRegistry {
 	async send(id: string, text: string, mode: "steer" | "follow_up"): Promise<string> {
 		this.calls.push(`send ${id} ${mode} ${text}`);
 		return "queued";
+	}
+
+	async restart(id: string, reason: "user" | "stall"): Promise<Run> {
+		this.calls.push(`restart ${id} ${reason}`);
+		return this.runs[0];
 	}
 
 	async resume(id: string, input: { answers: Record<string, string> }): Promise<Run> {
@@ -127,7 +133,7 @@ test("the live event carries zero, one, and several runs, counting only queued, 
 	assert.deepEqual(live().at(-1), { count: 0, runs: [] });
 	registry.runs = [makeRun({ id: "a" })];
 	registry.emit();
-	assert.deepEqual(live().at(-1), { count: 1, runs: [{ id: "a", agent: "glm", label: "Check ask", state: "running" }] });
+	assert.deepEqual(live().at(-1), { count: 1, runs: [{ id: "a", agent: "glm", label: "Check ask", state: "running", stalled: false }] });
 	registry.runs = [
 		makeRun({ id: "a" }),
 		makeRun({ id: "b", state: "paused" }),
@@ -346,9 +352,9 @@ test("rows list runs newest first with the selection marked and the key line las
 	);
 	assert.equal(lines[0], "");
 	assert.equal(lines[2], `  [> ${formatOverlayRow(makeRun({ id: "new", startedAt: NOW - 1_000 }), NOW, 56)}]`);
-	assert.match(lines[3], /^ {4}\{paused:⏸\} glm ask {2}Check ask {2}\{paused:paused\}: 2 q/);
-	assert.match(lines[4], /^ {4}\{running:▶\} glm old /);
-	assert.equal(lines.at(-1), "↑↓ select · ←→ pan · s stop · m message · a answer · esc or alt+a close");
+	assert.match(lines[3], /^ {4}\{warning:⏸\} glm ask {2}Check ask {2}\{warning:paused\}: 2 q/);
+	assert.match(lines[4], /^ {4}\{accent:▶\} glm old /);
+	assert.equal(lines.at(-1), "↑↓ select · ←→ pan · s stop · r restart · m message · a answer · esc or alt+a close");
 });
 
 test("up and down move the selection and wrap", async () => {
@@ -401,6 +407,46 @@ test("s stops the selected run only after the confirm says yes", async () => {
 	assert.deepEqual(registry.calls, ["stop new"]);
 	assert.deepEqual(log.confirms, ["Stop subagent: Stop glm new?", "Stop subagent: Stop glm new?"]);
 	assert.equal(log.suspends, 2);
+});
+
+test("r restarts the selected running run after a confirm that names the stall, and posts a note", async () => {
+	const { registry, log, script, press } = setupView();
+	script.confirm = false;
+	await press("r");
+	assert.deepEqual(registry.calls, []);
+	assert.deepEqual(log.confirms, ["Restart subagent: Restart glm new? The child is replaced and told to continue."]);
+	script.confirm = true;
+	registry.runs[1].modelSince = NOW - 3 * 60_000;
+	await press("r");
+	assert.deepEqual(registry.calls, ["restart new user"]);
+	assert.equal(
+		log.confirms.at(-1),
+		"Restart subagent: Restart glm new? Its model request has been in flight for 3 minutes. The child is replaced and told to continue.",
+	);
+	assert.deepEqual(log.posts, ["User restarted new"]);
+	assert.equal(log.suspends, 2);
+});
+
+test("r on a run that is not running notifies instead of asking", async () => {
+	const { registry, log, press } = setupView();
+	registry.runs[1].state = "done";
+	await press("down");
+	await press("down");
+	await press("r");
+	assert.deepEqual(registry.calls, []);
+	assert.deepEqual(log.confirms, []);
+	assert.deepEqual(log.notes, ["new is done, so it cannot be restarted"]);
+});
+
+test("a stalled running row paints its icon and stall word in warning, and the live event flags it", () => {
+	const { registry, view } = setupView();
+	registry.runs[1].modelSince = NOW - 150_000;
+	const lines = view.render(80);
+	assert.match(lines[2], /^ {2}\[> ▶ glm new {2}Check ask {2}stalled 2m {2}3 turns/);
+	const { pi, live } = fakePi();
+	createLiveView(pi, registry, () => undefined);
+	const last = live().at(-1) as { runs: { id: string; stalled: boolean }[] };
+	assert.deepEqual(last.runs.map((run) => `${run.id} ${run.stalled}`), ["old false", "new true", "ask false"]);
 });
 
 test("s on a finished run notifies instead of asking", async () => {
@@ -528,10 +574,10 @@ test("a list with both groups starts blank, titles each group, and the selection
 	assert.equal(lines[0], "");
 	assert.match(lines[1], /^ {2}RUNNING/);
 	assert.match(lines[2], /^  \[> ▶ glm new/);
-	assert.match(lines[3], /^ {4}\{paused:⏸\} glm ask/);
+	assert.match(lines[3], /^ {4}\{warning:⏸\} glm ask/);
 	assert.equal(lines[5], "");
 	assert.match(lines[6], /FINISHED/);
-	assert.match(lines[7], /^ {4}\{done:✓\} glm fin1/);
+	assert.match(lines[7], /^ {4}\{success:✓\} glm fin1/);
 	await press("down");
 	await press("down");
 	await press("down");

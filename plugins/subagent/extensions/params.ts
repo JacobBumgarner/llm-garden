@@ -4,7 +4,7 @@
  * the action accepts and names the fix. Imports nothing from pi packages.
  */
 
-export const ACTIONS = ["start", "status", "wait", "send", "stop", "resume"] as const;
+export const ACTIONS = ["start", "status", "wait", "send", "stop", "restart", "resume"] as const;
 export type Action = (typeof ACTIONS)[number];
 export type Scope = "user" | "project" | "both";
 export type Notify = "wake" | "quiet";
@@ -32,6 +32,7 @@ export type SubagentRequest =
 	| { action: "wait"; ids?: string[]; timeoutMs?: number }
 	| { action: "send"; id: string; message: string; mode: SendMode }
 	| { action: "stop"; id: string }
+	| { action: "restart"; id: string }
 	| { action: "resume"; id: string; answers: Record<string, string>; task?: undefined; background?: boolean }
 	| { action: "resume"; id: string; task: string; label?: string; answers?: undefined; background?: boolean };
 
@@ -45,6 +46,7 @@ const FIELDS: Record<Action, readonly string[]> = {
 	wait: ["ids", "timeout_s"],
 	send: ["id", "message", "mode"],
 	stop: ["id"],
+	restart: ["id"],
 	resume: ["id", "answers", "task", "label", "background"],
 };
 
@@ -54,6 +56,7 @@ const USAGE: Record<Action, string> = {
 	wait: "ids and timeout_s, both optional",
 	send: "id and message (mode optional)",
 	stop: "id",
+	restart: "id",
 	resume: "id and exactly one of answers or task (label optional with task, background optional)",
 };
 
@@ -124,6 +127,8 @@ export function parseParams(raw: Record<string, unknown>): ParseResult {
 			return parseSend(raw);
 		case "stop":
 			return parseStop(raw);
+		case "restart":
+			return parseRestart(raw);
 		case "resume":
 			return parseResume(raw);
 	}
@@ -142,6 +147,12 @@ function parseSend(raw: Record<string, unknown>): ParseResult {
 function parseStop(raw: Record<string, unknown>): ParseResult {
 	if (!isText(raw.id)) return usageError("stop", "Missing id.");
 	return { ok: true, request: { action: "stop", id: raw.id } };
+}
+
+/** Validate a restart: an id. */
+function parseRestart(raw: Record<string, unknown>): ParseResult {
+	if (!isText(raw.id)) return usageError("restart", "Missing id.");
+	return { ok: true, request: { action: "restart", id: raw.id } };
 }
 
 /** List the missing fields of a start task as `label, agent and task.`, followed by the fix when the label is among them. */
