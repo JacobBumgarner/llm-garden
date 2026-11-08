@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 SCRIPT = os.path.join(
-    os.path.dirname(__file__), "..", "skills", "code-review", "scripts", "semantic_commits.py"
+    os.path.dirname(__file__), "..", "skills", "commit-flow", "scripts", "semantic_commits.py"
 )
 spec = importlib.util.spec_from_file_location("semantic_commits", SCRIPT)
 sc = importlib.util.module_from_spec(spec)

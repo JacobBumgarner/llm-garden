@@ -1,6 +1,6 @@
 ---
 name: orchestration/organizer
-description: Regroup a branch of stage commits into a series of semantic commits by hunk, build it with the bundled script, and draft a PR body. Used by code-review organize and orchestrate at the end of a stage group.
+description: Regroup a branch of stage commits into a series of semantic commits by hunk, build it with the bundled script, and draft a PR body. Used by commit-flow organize and orchestrate at the end of a stage group.
 ---
 
 # Organizer

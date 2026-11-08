@@ -1,6 +1,6 @@
 ---
 name: orchestration/series-reviewer
-description: Read a built series of semantic commits and report, per commit, whether it holds one idea, whether its message matches its diff, and whether it depends on a later commit. Used by code-review organize after build.
+description: Read a built series of semantic commits and report, per commit, whether it holds one idea, whether its message matches its diff, and whether it depends on a later commit. Used by commit-flow organize after build.
 ---
 
 # Series reviewer

@@ -1,7 +1,7 @@
 {
   "name": "rubato",
-  "description": "The plan-build-commit loop in one plugin: orchestrate drives a phased workflow to a self-contained plan and delegates the build, then code-review rewrites the stage commits into a series a person can read.",
-  "version": "0.8.0",
+  "description": "The plan-build-commit loop in one plugin: orchestrate drives a phased workflow to a self-contained plan and delegates the build, then commit-flow rewrites the stage commits into a series a person can read, drafts the PR body, and folds in fixes.",
+  "version": "0.9.0",
   "author": {
     "name": "Jacob Bumgarner"
   }

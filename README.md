@@ -43,7 +43,7 @@ These two skills are the primary way I develop software with LLMs.
 
 New work, features, fixes, etc. start with me invoking the `/orchestrate`
 command. The orchestration skill guides the user and agents through a dev
-lifecycle until the work is complete. I review agent code with `/code-review`,
+lifecycle until the work is complete. I organize agent commits with `/commit-flow`,
 which is a built-in step of the orchestration review. 
 
 I am still experimenting with creating software with LLMs. I'm finding an
@@ -57,7 +57,7 @@ but this one is mine :)
 | Plugin | Skill | Details |
 | --- | --- | --- |
 | `rubato` | `orchestrate` | A phased development wrkflow where agents design and build while the user reviews at fixed checkpoints. Aims to place the dev into a "tech lead" position rather than author. Four phases: discovery (Q&A and recon), whiteboard (iterated design, presented as a pitch and the questions it survived), plan (staged into ordered, verifiable units), and build (implement, review, cleanup, and a final report against what was approved). |
-| `rubato` | `code-review` | Rewrites a branch of agent stage commits into a series of semantic commits a person can review, checks that the final code is unchanged, then takes the user's `tuicr` review and records what to fix. |
+| `rubato` | `commit-flow` | Rewrites a branch of agent commits into a series of semantic commits a person can read, checks that the final code is unchanged, drafts the PR body, and folds the user's fixes back in. |
 
 
 ## Installation
