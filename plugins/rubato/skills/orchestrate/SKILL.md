@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Run a phased software development workflow in which the user sets direction in short sessions while the orchestrator and its delegates design, build, and verify in the background. Q&A in cycles with recon and a critic, a plan grilled before the user sees it, a design review held as a conversation, a staged build where each stage is one commit, and a demo that hands off to the code-review skill. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Invoke with the argument `implement` after compaction to build the approved plan.
+description: Run a phased software development workflow in which the user sets direction in short sessions while the orchestrator and its delegates design, build, and verify in the background. Q&A in cycles with recon and a critic, a plan grilled before the user sees it, a design review held as a conversation, a staged build where each stage is one commit, and a demo that hands off to the commit-flow skill. Use when the user asks to "plan", "orchestrate", "let's build X", or wants to design before implementing. Invoke with the argument `implement` after compaction to build the approved plan.
 ---
 
 # Orchestrate
@@ -18,40 +18,61 @@ record. You never do by hand what a delegate could do.
 
 ## Phases
 
-There are six phases in the orchestration flow. The plan file's `step:` line
-tracks them.
+The plan file's `step:` line names the phase the plan is in, as a short free
+label such as `Q&A`, `design review`, `build`, `demo`, or `merged`. Only
+`merged` has a fixed spelling.
 
-1. **Request.** Session.
-2. **Q&A.** Session and background in cycles. Checkpoint 1.
-3. **Plan.** Background.
-4. **Design review.** Session, then the fresh-reader check in background.
-   Ends at approval, then compaction.
-5. **Build.** Background.
-6. **Demo.** Background, then session. Hands off to `code-review organize`.
+- **Request.** Session.
+- **Q&A.** Session and background in cycles. Checkpoint 1.
+- **Plan.** Background.
+- **Design review.** Session, then the fresh-reader check in background.
+  Ends at approval, then compaction.
+- **Build.** Background.
+- **Demo.** Background, then session. Hands off to `commit-flow organize`.
 
 The skill is invoked without any arguments. The skill starts at Request, or
-resumes a plan in `plan/` whose `step:` line matches the request. Invoked with
-`implement`, it resumes at Build. A plan in `plan/archive/` is never resumed.
+resumes a plan in the plan dir whose `step:` line matches the request. Invoked
+with `implement`, it resumes at Build. A plan under `archive/` is never
+resumed.
+
+## Plan dir
+
+Plans live outside the repo, at `~/dev/plans/{repo}/`, where `{repo}` is the
+directory name of the checkout, such as `lrl-xai-delphi`. Nothing under the
+plan dir is ever committed anywhere. The repo's git never sees it.
+
+```
+~/dev/plans/{repo}/
+  {plan-name}.md                   a plan in flight
+  {hub-name}-{nn}-{spoke}.md       a spoke beside its hub
+  scratch/{plan-name}/             delegate working material, PR body drafts
+  future/                          ideas not yet planned
+  archive/unreleased/              merged, not yet in a release
+  archive/v{version}/              merged and released
+  archive/superseded/              abandoned or replaced
+```
+
+`ls ~/dev/plans/{repo}/*.md` is the index of work in flight. A merged plan
+moves to `archive/unreleased/`. The release step, which is outside this
+skill, renames that folder to `archive/v{version}/`. A repo's `scripts/verify/`
+scripts stay in the repo and are committed, because they run against it.
+
+Every path a delegate receives is absolute. Delegates find scratch as
+`scratch/{plan-name}/` beside the plan file.
 
 ## Plan file
 
-`plan/{plan-name}.md`, with spokes beside their hub as
-`plan/{hub-name}-{nn}-{spoke}.md` and scratch at `plan/scratch/{plan-name}/`.
-The plan name is the filename without `.md`, everywhere it appears. `ls plan/`
-is the index of all work in flight. Above the fold is the user's
-material and the implementers' Details. Below it is the delegates' record. The
-`----` sits after the last stage. A merged plan moves to
-`plan/archive/unreleased/`. At release, that folder is renamed to
-`plan/archive/v{version}/` by the release step, so plans ship with the
-version they belong to.
+The plan name is the filename without `.md`, everywhere it appears. Above
+the fold is the user's material and the implementers' Details. Below it is
+the delegates' record. The `----` sits after the last stage.
 
 ````
 # {plan-name}
-step: N name  |  merged
+step: a short label  |  merged
 base: the commit each stage group left from, with its group, such as `bf208cb (g1)`
 
 ## Problem
-agent drafts, user rewrites in their own words
+agent drafts in chat, user confirms, then it goes in the file
 
 ## Design
 
@@ -101,8 +122,10 @@ Q  the question  (critic | recon | fresh reader | reviewer)
 A  the answer, and what moved if anything
 ````
 
-**Problem.** The agent drafts it from the request and the Q&A. The user
-rewrites it in their own words before the plan proceeds.
+**Problem.** The agent drafts it from the request and the Q&A and shows the
+draft in chat before writing it to the file. The user says what is missing or
+wrong, or that it stands. Only then does it go in the file. The user does not
+have to rewrite it.
 
 **Overview.** Plain language, distilled from Details. It adds nothing Details
 does not hold. It is rewritten at Demo from the built code.
@@ -126,22 +149,22 @@ one component or concern per paragraph, each paragraph leading with its
 point. Prose is the default. A diagram or a numbered walkthrough earns its
 place only when it shows something the prose cannot, such as a flow with
 branches, and never restates what the paragraphs already say. Where the
-build diverges from the plan, Details is edited in
-place at that moment, so the file describes what exists.
+build diverges from the plan, Details is edited in place at that moment, so
+the file describes what exists.
 
 **Stages.** The index sits above the stage blocks: one line per stage, title
 and verify phrase, for the user, ending in the stage's Status in square
-brackets so the index reads as a dashboard. Stages are in dependency order, each bounded by
-its Files, with independent stages marked so they can build in parallel in their
-own worktrees. In a stage block, Planned is one or two sentences, or the stage
-is too big. Verify is a check that would fail if the stage were wrong, not "add
-unit tests". Anything touching persistent state or a live system is checked
-against the real thing. A change that only shows in an interactive surface,
-such as a TUI command, is verified by a test of its logic with the host faked,
-and the surface itself is a user stage. Files is one line, comma separated, corrected to the
-actual list at stage end. A stage that belongs to the user, such as deploy,
-approve, or try the thing, has `Do` and `See` in place of Planned, Verify, and
-Files.
+brackets so the index reads as a dashboard. Stages are in dependency order,
+each bounded by its Files, with independent stages marked so they can build
+in parallel. In a stage block, Planned is one or two sentences, or the stage
+is too big. Verify is a check that would fail if the stage were wrong, not
+"add unit tests". Anything touching persistent state or a live system is
+checked against the real thing. A change that only shows in an interactive
+surface, such as a TUI command, is verified by a test of its logic with the
+host faked, and the surface itself is a user stage. Files is one line, comma
+separated, corrected to the actual list at stage end. A stage that belongs to
+the user, such as deploy, approve, or try the thing, has `Do` and `See` in
+place of Planned, Verify, and Files.
 
 Every stage block opens with `Status` and closes with `Outcome`. Status is one
 keyword and nothing else: `pending`, `in progress`, `blocked`, `done`,
@@ -156,7 +179,7 @@ Status it changes the matching index line in the same edit.
 **Stage groups.** A user stage whose `Do` deploys code anywhere, such as to
 CATS or to a config repo, ends a stage group. The group holds the stages
 before it, back to the previous deploy stage or the start, plus the deploy
-stage itself as its last stage. The group is organized, reviewed, and merged
+stage itself as its last stage. The group is organized and ready for the user
 before the deploy stage runs. Stages that depend on the deploy stay `blocked`
 until the user reports it done. A plan with no deploy stage is one group. The
 Stages index marks the boundary on the deploy stage's own line, which ends
@@ -164,8 +187,7 @@ Stages index marks the boundary on the deploy stage's own line, which ends
 group, `base: bf208cb (g1)`, then `base: bf208cb (g1), 4e1a9c0 (g2)` once
 group 2 starts. Group 1 builds on the branch `{plan-name}`. Each later group
 builds on `{plan-name}-g{N}` under the same prefix convention, from `main`
-after the previous group merged. A worktree, if one is used, takes the same
-suffix.
+after the previous group merged.
 
 **Review record.** The ledger below the fold. Under User: the Q&A sessions
 and the design conversation, question and answer, with an open question marked
@@ -175,18 +197,22 @@ with attribution is kept because it has caught real bugs before code. Every
 entry says what moved, or that nothing did.
 
 **Hub and spoke.** When a plan would run past about five stages, discuss with
-the user whether it should be split. The **hub** is `plan/{hub-name}.md` and
-holds three things: `## Problem`, `## Spokes` as a list with one line per spoke,
-`{nn} {spoke-name}: {step}`, and `## Decisions` for choices that cross spokes.
-It has no Design, no Stages, and no Review record. It is never built from. Each
-**spoke** is `plan/{hub-name}-{nn}-{spoke-name}.md`, a complete plan of this
-template with its own Problem, written from the hub's Problem and the spoke's
-line. Each spoke runs this skill on its own: its own Q&A, design review, build,
+the user whether it should be split. The **hub** is `{hub-name}.md` and holds
+`## Problem`, `## Spokes`, `## Decisions` for choices that cross spokes, and
+`## Follow-ups` for work the spokes surfaced but no spoke owns. It has no
+Design, no Stages, and no Review record. It is never built from. `## Spokes`
+has one line per spoke: `{nn} {spoke-name}: {step}`, with the PR numbers once
+merged and the spoke's plan path when the spoke lives in another repo's plan
+dir. Each **spoke** is `{hub-name}-{nn}-{spoke-name}.md`, a complete plan of
+this template with its own Problem, written from the hub's Problem and the
+spoke's line. A spoke that changes code in another repo lives in that repo's
+plan dir, under the same name, so the hub's line is the only way to find it.
+Each spoke runs this skill on its own: its own Q&A, design review, build,
 branch, and review. A spoke's Problem names its hub in its first line. The
-hub is created at Checkpoint 1 when the split is agreed, with the spoke list in
-the order they are built. When a spoke is merged, its line in the hub reads
-`merged`. When every spoke is merged, the hub moves to
-`plan/archive/unreleased/` with them. A decision made inside one spoke that
+hub is created at Checkpoint 1 when the split is agreed, with the spoke list
+in the order they are built. When a spoke is merged, its line in the hub
+reads `merged`. When every spoke is merged, the hub moves to
+`archive/unreleased/` with them. A decision made inside one spoke that
 another spoke must honor is copied up to the hub's Decisions at that moment.
 
 **Rules.**
@@ -195,12 +221,8 @@ another spoke must honor is copied up to the hub's Decisions at that moment.
   each hold their own kind of fact.
 - A correction edits the line it corrects. Never append a correction.
 - Recon stays in scratch. The plan holds its conclusions, not its findings.
-- Plan files are committed. They are the record and ship with the code.
-  Scratch is never committed. On the first run in a repo, add `plan/scratch/`
-  to `.gitignore`.
-- The plan file stays uncommitted until the demo is done. It changes through
-  every phase, and a committed copy would be stale by the next stage. It is
-  committed once, by the user, as the last commit, after the final fold.
+- Nothing under the plan dir is committed. The plan is the user's record,
+  not the repo's.
 
 ## Running the phases
 
@@ -236,26 +258,21 @@ repo has none of the gates named under Build, ask in the same round whether
 stage 1 adds them or this plan skips them.
 
 On just do it, there is no plan file. Do the work in this session, commit
-under the Commits form, and offer `code-review organize` when done.
+under the Commits form in the `orchestration/implementer` brief, and offer
+`commit-flow organize` when done.
 
 On plan, create the branch `{plan-name}` under the repo's prefix convention if
 it has one, such as `feat/`, and check it out in the repo's own checkout. No
-worktree by default: one plan building alone needs only its branch, and a
-worktree costs a second environment, a second set of ignored files, and
-`--active` style flags on every command.
+worktree by default. A worktree is for parallel work only: a second plan, or
+independent stages of one plan, building at the same time. Two things cannot
+edit one working tree at once, so each parallel branch gets its own worktree
+at `.agents/worktrees/{plan-name}/`. `reference/worktrees.md` beside this
+file has the setup and the pruning procedure.
 
-A worktree is for parallel work only: a second plan, or independent stages of
-one plan, building at the same time. Two things cannot edit one working tree
-at once, and a branch can be checked out in one place at a time, so each
-parallel branch gets its own worktree. Create it inside the repo at
-`.agents/worktrees/{plan-name}/`, which `.gitignore` covers, with
-`git worktree add .agents/worktrees/{plan-name} {branch}`. Then give it an
-environment, such as `uv sync` there, and copy in any ignored local files its
-Verify needs, such as `scripts/`. One plan to one branch to one working tree,
-and parallel plans never share one. Create `plan/{plan-name}.md` with the `base:` line set to the commit the
-branch left from and Success criteria written. Draft `## Problem`, and the
-user rewrites it before the plan proceeds. Say that the user is next needed at
-the design review.
+Create `~/dev/plans/{repo}/{plan-name}.md` with the `base:` line set to the
+commit the branch left from and Success criteria written. Show the Problem
+draft in chat, take the user's corrections, then write it in. Say that the
+user is next needed at the design review.
 
 ### Plan
 
@@ -270,7 +287,8 @@ Background. Write the plan file in this order.
    `orchestration/critic`, one told the design half and one the placement
    half. Each writes to its own file under scratch. Copy their questions into
    the Review record under Delegates, then answer every one or change the plan
-   and say what moved. A question only the user can answer is held for the design review.
+   and say what moved. A question only the user can answer is held for the
+   design review.
 4. **Decisions.** The orchestrator curates them from the critics' answers.
 5. **Overview.** The orchestrator writes it last, from Details.
 6. **Editor pass** on the whole file above the fold and on the Review
@@ -310,17 +328,18 @@ another model gets brief `orchestration/fresh-reader` and the plan file path,
 nothing else. The brief defines what it reports and what counts as a guess. The
 orchestrator sorts the findings: a guess becomes a stated fact in Details,
 a contradiction with the code is corrected, and anything that would need the
-user is raised through the needs-input notification. Then one more pass on a
-third model with the same brief. Two passes is the cap. What a second pass still
-reports is fixed and the check ends. Each pass adds to Details only what closes
-a guess. A line that tells the implementer how to type something they could
-not get wrong does not belong there.
+user is recorded `(open)` in the Review record and asked at the start of the
+next session. Then one more pass on a third model with the same brief. Two
+passes is the cap. What a second pass still reports is fixed and the check
+ends. Each pass adds to Details only what closes a guess. A line that tells
+the implementer how to type something they could not get wrong does not
+belong there.
 
 When the check ends, print, every run:
 
-> Plan approved at `plan/{plan-name}.md`. Run `/compact focus on the plan file
-> at plan/{plan-name}.md and the pending stages`, then invoke this skill with
-> the argument `implement`.
+> Plan approved at `~/dev/plans/{repo}/{plan-name}.md`. Run `/compact focus on
+> the plan file at ~/dev/plans/{repo}/{plan-name}.md and the pending stages`,
+> then invoke this skill with the argument `implement`.
 
 Build works from the plan file, not from memory of the debate. Say that the user
 is next needed at the demo.
@@ -335,9 +354,9 @@ parallel in their own worktrees.
    commits the stage once.
 2. **Review.** A delegate on another model gets brief `orchestration/reviewer`,
    the plan file path, the stage number, and the commit. It edits to the cleanup
-   bar, folds its fixups into the stage commit, and rewrites the message under
-   the Commits form. It returns what it changed and anything it left because
-   it would change a Decision.
+   bar in its brief, folds its fixups into the stage commit, and rewrites the
+   message under the Commits form. It returns what it changed and anything it
+   left because it would change a Decision.
 3. **Record.** The orchestrator sets Status, writes the Outcome per the spec,
    and updates the stage's index line. Where the build diverged from the
    plan, it edits Details and Decisions in place now, and corrects Files to
@@ -346,16 +365,16 @@ parallel in their own worktrees.
 
 Verify is a condition both the first two steps must pass, not a step of its own.
 The build never waits for the user, with one exception: a user stage stops the
-stages that depend on it until the user reports back, raised through the
-needs-input notification.
+stages that depend on it until the user reports back.
 
 **Blocking questions.** A question is blocking when a stage cannot reach its
 Verify without the answer and nothing in the plan file or the repo's conventions
 supplies it. A choice between equivalents is not blocking: pick one and record a
-Decision. Raise a blocking question at once through the needs-input notification
-and record it in the Review record as open. The blocked stage waits. Stages that
-do not depend on it proceed. Never resolve a blocking question by guessing.
-Batch non-blocking questions for the next session.
+Decision. A delegate that hits one pauses and returns the question. The
+orchestrator records it `(open)` in the Review record, marks the stage
+`blocked`, and asks it through the question tool the moment the user is next
+in the room. Stages that do not depend on it proceed. Never resolve a blocking
+question by guessing. Non-blocking questions are batched for the same session.
 
 **Gates.** A stage is not done until Verify passes and the repo's lint,
 complexity, nesting, docstring, and import boundary gates pass. The repo owns
@@ -363,95 +382,40 @@ the thresholds and the skill never states them. If the repo has none, the user
 decided at Checkpoint 1 whether stage 1 adds them. Gate results are one line in
 the Outcome.
 
-**Commits.** Each stage ends in one commit on the plan's branch. The form
-below is copied in the `orchestration/implementer`,
-`orchestration/reviewer`, and `orchestration/organizer` briefs, and the copies
-must match this one. Stage commits carry `[sN]`. The semantic series that
-`code-review` builds from them carries `[cN]`, numbered in series order. The
-title carries the stage and says what the change does, under about 60
-characters:
-`[s2] client: ask the server for its minimum client version`.
-
-The body has two parts separated by a line holding only `---`. Above it, the
-technical description. Below it, the plain description. Either part is as long
-as it needs to be. Each paragraph and each list item is one line, however
-long, with no line breaks inside it, so `lazygit` and GitHub wrap it to their
-own width.
-
-The technical part is written in Plain language. It opens with a short
-paragraph. Its first sentence says what the change makes possible or prevents,
-and why. The sentences after it cover any behavior that would surprise a
-reader. Then comes a list, one `- ` item per line, naming each piece that
-changed and what is different in it: a file, a function, a type, a flag, with
-the new behavior in a few words. One file's changes go in one item. Tests go
-in a single item that names the test files. The list is for a reader deciding
-whether to open the diff, so an item says what is different, not that a file
-was edited.
-
-The plain part is for a reader who has never seen the code: what is different
-for them now. Prose only, no list.
-
-```
-[s2] client: ask the server for its minimum client version
-
-Adds client_info() so KernelClient can ask the server for the oldest client version it still supports. The call has a 2 s timeout so a slow server cannot stall a turn.
-
-- client.py gains client_info(), which calls GET /client-info with a 2 s timeout and returns a ClientInfo.
-- client.py builds the default User-Agent through httpx.Headers, so a caller's header wins under any casing and nothing is sent twice.
-- models.py gains ClientInfo with min_client_version and server_version.
-- Tests added in test_client.py and test_models.py.
-
----
-
-The tool can now find out if it is too old for the server.
-```
-
-A cleanup commit has the same form. Within a stage, before Record, the
-reviewer folds its fixups into the stage commit and rewrites the message under
-this form, so each stage is one commit. After Record, no commit is touched. A
-fix after the user's review is a new commit titled `[cN] fix: what it does`,
-where `cN` is the series commit it belongs to. Nothing is pushed. The stage
-commits are the agent's record, and the organizer rewrites them into the
-series at the end of the group. The plan file is never part of a stage
-commit, and it is not committed on its own either until the demo is done.
-
-**Cleanup bar.** Copied in the `orchestration/reviewer` brief, and the copy
-must match this one. On top of the repo's conventions and gates:
-
-- Functions are small, with shallow nesting and one job each.
-- Each file does one thing, and it is what the module name says.
-- No comment narrates the line below it. A comment exists only for a quirk the
-  reader cannot infer: a rejected alternative, a required ordering, a magic
-  value's source.
-- Docstrings follow Plain language: an imperative first line saying what the
-  unit does, nothing the signature already says.
-- Comments and docstrings are self-contained. No reference to plans, stages, or
-  "the new X".
-- Naming follows the language's convention and the repo's existing style.
-- No dead code, no leftover scratch, no logic duplicated across stages.
+**Commits.** Each stage ends in one commit on the plan's branch, titled
+`[sN] area: what it does`. The full Commits form, title and two-part body,
+lives in the `orchestration/implementer`, `orchestration/reviewer`, and
+`orchestration/organizer` briefs, and those three copies must match. The
+orchestrator never writes a commit itself. Within a stage, before Record, the
+reviewer folds its fixups into the stage commit, so each stage is one commit.
+After Record, no commit is touched. The stage commits are the agent's record.
+At the end of the group the organizer rewrites them into a `[cN]` series the
+user reads. A fix the user asks for after that is a new commit titled
+`[cN] fix: what it does`, folded into its `[cN]` by the organizer. Nothing is
+pushed.
 
 **End of a group.** When the last stage of a group is recorded, the
-orchestrator follows the Organize steps of the `code-review` skill. It runs
-`list`, applies the size guard, and sends the organizer and then the series
-reviewer. It writes the old-to-new map into the Review record under
-Delegates, and tells the user: `Series ready on {branch}: [c1]..[cN]. Read in
-tuicr, then /code-review in a fresh session.` Then it waits. The user
-comes back with a review file, or with the word that the series is approved
-as it stands.
+orchestrator follows the Organize steps of the `commit-flow` skill. It runs
+`list`, applies the size guard, sends the organizer, then the series reviewer,
+then the organizer again with the report. It writes the old-to-new map into
+the Review record under Delegates, and tells the user:
 
-**Fix stages and fold.** When the user approves the series as it stands, or
-the review file holds no `fix` entry, there is nothing to build or fold, and
-the orchestrator records any `answered` or `declined` outcomes and moves on
-to the merge. Otherwise the user returns with the review file,
-`plan/scratch/{plan-name}/review-{g}.md`, where `{g}` is the group number.
-The orchestrator adds one fix stage per `fix` entry to the Stages index and
-blocks, inside the group, titled `Fix for [cN]: what it does`, with Status and
-Outcome like any stage. Each builds through the implementer and reviewer as
-usual, with the commit title `[cN] fix: ...`. The orchestrator then sends the
-organizer with the task `fold`. It writes each comment's outcome into the
-Review record under User: the comment, the decision, and the commit that
-carries the fix. The user then rewords in `lazygit`, pushes, and merges. The
-orchestrator pushes only when the user says to. When the user reports the
+> Series ready on `{branch}`: `[c1]..[cN]`. PR body at
+> `~/dev/plans/{repo}/scratch/{plan-name}/{plan-name}-pr-body-{g}.md`.
+
+Then it waits. The user comes back with the word that the series stands, or
+with comments in chat.
+
+**Fixes and fold.** When the user says the series stands, move on to the
+merge. When the user has comments, each one that asks for a change becomes a
+fix stage added to the Stages index and blocks, inside the group, titled `Fix
+for [cN]: what it does`, with Status and Outcome like any stage. Each builds
+through the implementer and reviewer as usual, with the commit title `[cN]
+fix: ...`. The orchestrator then sends the organizer with the task `fold`,
+which puts each fix into its `[cN]` and rewrites the PR body. Each comment's
+outcome goes in the Review record under User: the comment, the decision, and
+the commit that carries the fix. The user then pushes and merges on their own.
+The orchestrator pushes only when the user says to. When the user reports the
 merge, the deploy stage that ended the group runs, and the next group starts
 on its own branch. Stages that depend on the deploy stay `blocked` until the
 user reports it done.
@@ -461,49 +425,26 @@ user reports it done.
 First, in background. Rewrite Overview from the built code and the current
 Details. Then a second fresh-reader check: a delegate on another model gets
 brief `orchestration/fresh-reader`, the plan file path, and the word that the
-code is built. It names every line where the file no longer describes what got built.
-Fix each in place. Then an editor pass on Overview, Decisions, and Details.
+code is built. It names every line where the file no longer describes what got
+built. Fix each in place. Then an editor pass on Overview, Decisions, and
+Details.
 
 Then, in session. Go down Success criteria in order. For each, the user runs the
 named command, or sees the script's output, and confirms what appears. After the
 last criterion, list divergences, one line each with the Decision that moved,
-and the open items in the Review record. A finding that needs more work becomes
-a follow-up plan or a spoke, never more stages.
+and the open items in the Review record. A finding that needs more work goes
+one of three ways, and the user picks: a small follow-on becomes a stage in a
+new group at the end of this plan, marked `(independent, next)`, a larger one
+becomes a follow-up plan or a spoke, and an idea with no owner yet goes under
+`future/`.
 
-Then hand off to `code-review organize` for the final group, which follows
-End of a group above. The user reads in `tuicr`, reviews in a fresh session,
-and rewords in `lazygit`. Nothing leaves the machine before the user pushes.
-The plan file is committed by the user, last and alone, after the fold.
+Then hand off to `commit-flow organize` for the final group, which follows
+End of a group above. Nothing leaves the machine before the user pushes.
 
 When the commits are merged, set `step: merged`, move the plan to
-`plan/archive/unreleased/`, delete `plan/scratch/{plan-name}/`, and update
-the spoke's status line in its hub.
-
-**Pruning a worktree after merge.** Run every step from a shell in the repo's
-main checkout, never from inside the worktree, because removing the directory
-under a shell kills that shell.
-
-1. `git worktree list` to see what exists.
-2. Copy out of the worktree anything untracked or ignored that should
-   survive: `plan/scratch/{plan-name}/`, local `scripts/`, a `.env`. Git will
-   not carry them over, and `git worktree remove` deletes them.
-3. In the main checkout, `git status --short`. If it shows uncommitted
-   changes, stop and have the user commit or stash them first. `git pull` with
-   autostash will reapply them onto the merged tree, and when the merge moved
-   files, the reapply conflicts and leaves markers in the working tree.
-4. `git fetch -p && git pull --ff-only`.
-5. `git worktree remove .agents/worktrees/{plan-name}`, with `--force` when it
-   still holds untracked files, then `git worktree prune`.
-6. `git branch -d {branch}`. The merge usually deletes the remote branch, and
-   `git branch -a | grep {plan-name}` shows whether one remains. If so,
-   `git push origin --delete {branch}`.
-7. `git worktree list` shows the main checkout alone, and the suite passes
-   there.
-
-A rebase in the main checkout fails with "untracked working tree files would be
-overwritten" when a replayed commit adds a file that now exists untracked, for
-example a file the branch first tracked and later untracked. Move the
-directory aside for the rebase and move it back after.
+`archive/unreleased/`, delete `scratch/{plan-name}/`, and update the spoke's
+line in its hub. If a worktree was used, prune it per
+`reference/worktrees.md`.
 
 ## Working rules
 
@@ -516,13 +457,15 @@ when a session is done, and say when they are next needed.
 
 ### Delegation and evidence
 
-Three tiers of model are available. Free (`glm`, `qwen`) for lookups, retrieval,
-reading the repo, summarizing, and any check with a mechanical answer, used
-without limit. Mid (`haiku-5-5`, `sonnet-5-5`) for recon with judgment, critique, and
-mechanical stages. Heavy (`fable-5-1`) for reviewing work a lower tier produced
-and for critique where the design is in doubt. Design-bearing implementation
-runs on `sonnet-5-5`, not on a heavy model. A review always runs on a
-different model than the work it reviews.
+Three tiers of model. **Free** for lookups, retrieval, reading the repo,
+summarizing, and any check with a mechanical answer, used without limit.
+**Mid** for recon with judgment, critique, mechanical stages, and
+design-bearing implementation. **Heavy** for reviewing work a lower tier
+produced and for critique where the design is in doubt. A review always runs
+on a different model than the work it reviews. The subagent tool lists what
+is available. Today's mapping, the one line to edit when the roster changes:
+free is `glm` and `qwen`, mid is `sonnet-5-5` with `haiku-5-5` for the
+mechanical end, heavy is `opus-5-5`.
 
 Each delegate is a fresh session that cannot read this skill. Its standing
 instructions are a brief, one per job, which the subagent tool appends to the
@@ -530,24 +473,28 @@ delegate's system prompt when the `brief` field names it. The briefs for this
 skill are `orchestration/recon`, `orchestration/critic`,
 `orchestration/fresh-reader`, `orchestration/implementer`,
 `orchestration/reviewer`, `orchestration/editor`, `orchestration/organizer`,
-and `orchestration/series-reviewer`.
-The tool lists them. The task is then only the inputs, one per line, every
-path absolute. Repo facts such as how to run tests, which runner to use, and
-code style are not inputs: every brief says to read the repo's `AGENTS.md`,
-so they live there.
+and `orchestration/series-reviewer`. The tool lists them. The task is then
+only the inputs, one per line, every path absolute. Every delegate runs with
+`cwd` set to the repo checkout it works in, the main checkout or the
+worktree, because the plan file is outside the repo and the briefs say "the
+repo" meaning the working directory. Repo facts such as how to run tests,
+which runner to use, and code style are not inputs: every brief says to read
+the repo's `AGENTS.md`, so they live there.
 
 ```
 brief: orchestration/critic
+cwd: /Users/me/dev/my-repo
 task: |
-  Plan file: /abs/path/to/plan/stash-list.md
+  Plan file: /Users/me/dev/plans/my-repo/stash-list.md
   Half: design
 ```
 
 Never paraphrase a brief into the task, and do not add lists of files to
 read: the plan's Files and Details name them. Delegates write to
-`plan/scratch/{plan-name}/` or to the Review record under Delegates. Independent delegates run concurrently, sent
-in one message. Before any user round, send out whatever recon would make the
-questions sharper.
+`scratch/{plan-name}/` beside the plan file or to the Review record under
+Delegates. Independent delegates run concurrently, sent in one message.
+Before any user round, send out whatever recon would make the questions
+sharper.
 
 A design choice reaches the user with evidence, not as a pair of adjectives.
 When X and Y are both plausible, a spike settles what can be settled: a
@@ -566,7 +513,7 @@ constraint the user gave.
 ### Prose
 
 These rules cover every line written for the user, including the plan file and
-commit bodies. Pass them into any brief whose output the user reads.
+commit bodies. The briefs carry their own copy.
 
 - Lead with the point. Contractions are fine.
 - No em dashes or semicolons. Use a comma or a period.

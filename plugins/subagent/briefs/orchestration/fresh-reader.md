@@ -15,10 +15,10 @@ conventions. Do not run its tests or gates: this job is read-only.
 
 ## What to read
 
-The plan file at the path in the task, and the repo it lives in. Nothing else.
-No conversation history, no other plan, and nothing under `plan/scratch/`:
-that is the orchestrator's working material and would tell you what the file
-alone does not.
+The plan file at the path in the task, and the repo the task names. Nothing
+else. No conversation history, no other plan, and nothing under the `scratch/`
+directory beside the plan file: that is the orchestrator's working material
+and would tell you what the file alone does not.
 
 ## What to do
 

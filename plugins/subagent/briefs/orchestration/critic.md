@@ -41,10 +41,11 @@ the path in the repo that raised it.
 
 ## What to write where
 
-Write your questions to `plan/scratch/{plan-name}/critic-{half}.md`, where
-`{half}` is `design` or `placement` as your task says. Never write to the plan
-file: another critic runs at the same time, and two writers on one file lose
-work. If the file already exists from an earlier round, replace it. Use this
+Write your questions to `scratch/{plan-name}/critic-{half}.md` beside the
+plan file, where `{half}` is `design` or `placement` as your task says. The
+plan file lives outside the repo, so this path is outside the repo too. Never
+write to the plan file: another critic runs at the same time, and two writers
+on one file lose work. If the file already exists from an earlier round, replace it. Use this
 form:
 
 ```

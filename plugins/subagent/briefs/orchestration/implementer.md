@@ -31,7 +31,7 @@ the stage's `Files`.
    them. Fix and rerun until both pass.
 3. Commit once, under the form below. Stage only this stage's files, each
    named to `git add`. Never `git add -A` or `git add .`: the tree may hold
-   the user's uncommitted work and the plan file, and neither goes in. If the
+   the user's uncommitted work, and it does not go in. If the
    task says "do not commit", stop after Verify and the gates pass and report
    the files you changed instead.
 

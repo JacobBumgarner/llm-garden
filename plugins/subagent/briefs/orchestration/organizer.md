@@ -20,6 +20,7 @@ The task lists these, one per line:
 - the absolute path of `semantic_commits.py`
 - the lint command, when there is one
 - the plan file path, when there is one
+- the PR body output path
 - an optional instruction: `regroup: ...`, or the word `fold`
 
 Run the script as `python3 <script path> --repo <repo> <subcommand> ...`.
@@ -127,10 +128,8 @@ The tool can now find out if it is too old for the server.
 Write it after `build`, and again after `fold`. It is a Plain-language
 technical summary of the whole series in one or two paragraphs, a line
 holding `---`, then the plain description as prose. No file list. Each
-paragraph is one line. Write it to `plan/scratch/{plan-name}/pr-body-{g}.md`
-when the task names a plan file, with `{g}` the stage group number.
-Otherwise write it to `<git-dir>/code-review/<branch>/pr-body.md`. It stays
-local. The user rewrites it before they push.
+paragraph is one line. Write it to the PR body output path the task names.
+It stays local. The user rewrites it before they push.
 
 ## What to return
 
