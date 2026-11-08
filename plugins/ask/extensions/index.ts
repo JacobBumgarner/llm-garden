@@ -149,7 +149,12 @@ export default function (pi: ExtensionAPI) {
 				const details: AskDetails = { questions, result: { answers: [], cancelled: true }, paused: true };
 				return { content: [{ type: "text", text: PAUSE_NOTICE }], details };
 			}
-			const result = await ctx.ui.custom<AskResult>((tui, theme, _kb, done) => new AskForm(tui, theme, questions, done));
+			// Report pi as blocked on a question (OSC 7501) while the form is open, so
+			// terminals like Herdr show it as needing input. `blocked` is pi 1.5+;
+			// a variable skips the excess-property check against older dev types,
+			// and `overlay: false` (the default) keeps it from being a weak-type mismatch.
+			const options = { overlay: false, blocked: { kind: "question" as const, message: questions[0]?.question ?? "Questions" } };
+			const result = await ctx.ui.custom<AskResult>((tui, theme, _kb, done) => new AskForm(tui, theme, questions, done), options);
 			const details: AskDetails = { questions, result };
 			return { content: [{ type: "text", text: formatResult(questions, result) }], details };
 		},
