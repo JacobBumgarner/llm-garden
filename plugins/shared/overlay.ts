@@ -1,12 +1,14 @@
 /**
  * Open a component as an overlay and own everything around it: the rounded
  * frame with a painted title, mouse coordinates shifted into the frame, the
- * outside-click policy, hide and show around dialogs, and the refresh timer.
+ * outside-click policy, hide and show around dialogs, the refresh timer, and the
+ * image shield that keeps inline images from drawing over the frame.
  * A panel draws only its text area and sees coordinates relative to it.
  */
 
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type OverlayHandle, type OverlayOptions, truncateToWidth, type TUI, type TuiMouseEvent, type TuiMouseEventResult, visibleWidth } from "@earendil-works/pi-tui";
+import { shieldImages } from "./image-shield.ts";
 import { watchOutsideClicks } from "./outside-click.ts";
 
 /** Columns the frame takes from the width: a border and a space on each side. */
@@ -66,6 +68,7 @@ class Framed implements Component {
 	private height = 0;
 	private captured = false;
 	private readonly refresh?: ReturnType<typeof setInterval>;
+	private readonly unshield: () => void;
 	private readonly panel: Panel;
 	private readonly spec: OverlaySpec;
 	private readonly theme: Theme;
@@ -74,6 +77,7 @@ class Framed implements Component {
 		this.panel = panel;
 		this.spec = spec;
 		this.theme = theme;
+		this.unshield = shieldImages(tui);
 		if (spec.refreshMs) {
 			this.refresh = setInterval(() => tui.requestRender(), spec.refreshMs);
 			this.refresh.unref?.();
@@ -117,6 +121,7 @@ class Framed implements Component {
 
 	dispose(): void {
 		if (this.refresh) clearInterval(this.refresh);
+		this.unshield();
 		this.panel.dispose?.();
 	}
 }
