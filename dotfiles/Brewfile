@@ -19,3 +19,4 @@ brew "tuicr"
 
 cask "ghostty"
 cask "cmux"
+cask "herdr-app"

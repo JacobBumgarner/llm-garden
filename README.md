@@ -92,6 +92,9 @@ extensions can be easily migrated to a new computer.
 | `dotfiles/cmux/cmux.json` | `~/.config/cmux/cmux.json` |
 | `dotfiles/cmux/sidebars/agents.js` | `~/.config/cmux/sidebars/agents.js` |
 | `dotfiles/pi/extensions/cmux-needs-input.ts` | `~/.pi/agent/extensions/cmux-needs-input.ts` |
+| `dotfiles/herdr/layouts/projects.json` | `~/.config/herdr-app/layouts/projects.json` |
+| `dotfiles/herdr/mods/my-agents/` | `~/.config/herdr-app/mods/my-agents/` |
+| `dotfiles/herdr/mods/my-projects/` | `~/.config/herdr-app/mods/my-projects/` |
 | `dotfiles/lazygit/config.yml` | `~/.config/lazygit/config.yml` |
 | `dotfiles/git/delta.gitconfig` | `~/.config/git/delta.gitconfig` |
 
@@ -110,4 +113,18 @@ keep a live edit, copy it back into `dotfiles/` by hand before committing.
 an `include.path` pointing at `delta.gitconfig` instead.
 
 `pi` installs separately, see the pi section above.
+
+### Herdr
+
+`dotfiles/herdr/` holds a personal [Herdr](https://herdr.dev) layout and the
+mods it points at. `projects.json` is a clone of Herdr's `main` layout with the
+bottom status bar removed, the spaces block pointed at `my-projects`, and the
+agents block at `my-agents`. `my-projects` clones the stock `spaces` mod and
+lists each repo's tabs under it (session name, age, status), so several agents
+on separate projects in one repo stay visible. `my-agents` clones `agents`:
+its header shows the agent count and how many need you, and each row leads
+with the session name, repo dim after it. Both strip pi's `π - … - <folder>`
+title decoration. Herdr regenerates `jsconfig.json` and `gpui-kit.d.ts` inside each mod
+folder on start, so those aren't tracked. After `install.sh`, pick the layout
+with `herdr-app do layout.switch --name projects` or `ctrl-shift-l`.
 
