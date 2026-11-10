@@ -54,7 +54,7 @@ the user gives, or `main` when neither is named.
    The organizer's old-to-new map goes with it. The user rewrites the PR body
    before they push.
 
-**PR body path.** With a plan, `scratch/{plan-name}/{plan-name}-pr-body-{g}.md`
+**PR body path.** With a plan, `scratch/{plan-name}-pr-body-{g}.md`
 beside the plan file, where `{g}` is the stage group number. The plan name in
 the filename is so the user can find it in a file manager. Without a plan,
 `<git-dir>/code-review/<branch>/pr-body.md`, where `<git-dir>` is the output

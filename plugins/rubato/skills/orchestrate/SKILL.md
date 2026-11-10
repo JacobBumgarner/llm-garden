@@ -32,8 +32,8 @@ label such as `Q&A`, `design review`, `build`, `demo`, or `merged`. Only
 
 The skill is invoked without any arguments. The skill starts at Request, or
 resumes a plan in the plan dir whose `step:` line matches the request. Invoked
-with `implement`, it resumes at Build. A plan under `archive/` is never
-resumed.
+with `implement`, it resumes at Build. Only a plan under `00-active/` is
+resumed, and never a spoke whose `step:` reads `merged`.
 
 ## Plan dir
 
@@ -43,22 +43,54 @@ plan dir is ever committed anywhere. The repo's git never sees it.
 
 ```
 ~/dev/plans/{repo}/
-  {plan-name}.md                   a plan in flight
-  {hub-name}-{nn}-{spoke}.md       a spoke beside its hub
-  scratch/{plan-name}/             delegate working material, PR body drafts
-  future/                          ideas not yet planned
-  archive/unreleased/              merged, not yet in a release
-  archive/v{version}/              merged and released
-  archive/superseded/              abandoned or replaced
+  00-active/
+    {plan-name}/
+      {plan-name}.md               a plan in flight
+      scratch/                     delegate working material, PR body drafts
+    {hub-name}/
+      {hub-name}.md                a hub, which has no scratch of its own
+      {nn}-{spoke}/                a spoke, inside its hub's dir
+        {hub-name}-{nn}-{spoke}.md
+        scratch/
+  01-complete/
+    {plan-name}/
+      {plan-name}.md               merged, tagged with date and final sha
+    v{version}/, superseded/       plans migrated from a repo's old plan/archive/,
+                                   one dir per plan inside, read-only history
+    _orphan_scratch/               migrated scratch whose plan is not active
+  02-future/
+    {idea}.md                      an idea not yet planned
+  03-notes/
+    {note}.md or {topic}/          reference material, never resumed or built from
 ```
 
-`ls ~/dev/plans/{repo}/*.md` is the index of work in flight. A merged plan
-moves to `archive/unreleased/`. The release step, which is outside this
-skill, renames that folder to `archive/v{version}/`. A repo's `scripts/verify/`
-scripts stay in the repo and are committed, because they run against it.
+Each plan has its own dir, named for the plan, and the dir moves as one
+piece. `ls ~/dev/plans/{repo}/00-active/` is the index of work in flight. A
+merged plan gets a `completed:` line with the merge date and the final commit
+sha, then its dir moves to `01-complete/`. An abandoned plan is deleted, or
+cut down to an idea note under `02-future/` when the idea is still alive. The
+plan that replaced it says why in its Decisions. Background reading, decision
+records, and other material that is not a plan go under `03-notes/`.
+
+A hub's dir holds its spokes, one dir each, and the hub dir is the piece that
+moves. Every spoke lives there, including a spoke that changes code in
+another repo. A merged spoke stays in place with `step: merged`. The hub dir
+moves to `01-complete/` when its last spoke is merged. Wherever this skill
+writes `00-active/{plan-name}/`, a spoke's dir is
+`00-active/{hub-name}/{nn}-{spoke}/`.
+
+The `v{version}/`, `superseded/`, and `_orphan_scratch/` dirs
+under `01-complete/` hold plans and scratch migrated from the old in-repo
+`plan/` layout. Read them for history. This skill never adds to them: a newly
+merged plan goes directly under `01-complete/`.
+
+Two things stay in the repo and are committed. Release roadmap and tracker
+files, such as `plan/v1.0.0-plan.md` or `plan/archive/v0.4.0/v0.4.0-roadmap.md`,
+stay under the repo's `plan/`, and a plan refers to them by that repo path. A
+repo's `scripts/verify/` scripts stay because they run against the repo.
 
 Every path a delegate receives is absolute. Delegates find scratch as
-`scratch/{plan-name}/` beside the plan file.
+`scratch/` beside the plan file.
 
 ## Plan file
 
@@ -69,6 +101,8 @@ the delegates' record. The `----` sits after the last stage.
 ````
 # {plan-name}
 step: a short label  |  merged
+repo: only on a spoke that builds in another repo, the absolute path of that checkout
+completed: added at merge, the date and final commit sha, such as `2025-06-14 9c41e2a`
 base: the commit each stage group left from, with its group, such as `bf208cb (g1)`
 
 ## Problem
@@ -202,17 +236,22 @@ the user whether it should be split. The **hub** is `{hub-name}.md` and holds
 `## Follow-ups` for work the spokes surfaced but no spoke owns. It has no
 Design, no Stages, and no Review record. It is never built from. `## Spokes`
 has one line per spoke: `{nn} {spoke-name}: {step}`, with the PR numbers once
-merged and the spoke's plan path when the spoke lives in another repo's plan
-dir. Each **spoke** is `{hub-name}-{nn}-{spoke-name}.md`, a complete plan of
+merged and the repo name when the spoke builds in another repo. Each
+**spoke** is `{hub-name}-{nn}-{spoke-name}.md` in the dir
+`{nn}-{spoke-name}/` inside the hub's dir, a complete plan of
 this template with its own Problem, written from the hub's Problem and the
-spoke's line. A spoke that changes code in another repo lives in that repo's
-plan dir, under the same name, so the hub's line is the only way to find it.
+spoke's line. Its plan name, and so its branch and worktree name, is the
+full `{hub-name}-{nn}-{spoke-name}`. A spoke that changes code in another
+repo still lives in the hub's dir. Its `repo:` line names the checkout it
+builds in, and that checkout is the `cwd` of its delegates, the home of its
+branch, and the repo whose `AGENTS.md`, gates, and `scripts/verify/` apply.
 Each spoke runs this skill on its own: its own Q&A, design review, build,
 branch, and review. A spoke's Problem names its hub in its first line. The
 hub is created at Checkpoint 1 when the split is agreed, with the spoke list
 in the order they are built. When a spoke is merged, its line in the hub
-reads `merged`. When every spoke is merged, the hub moves to
-`archive/unreleased/` with them. A decision made inside one spoke that
+reads `merged` and its dir stays where it is. When every spoke is merged,
+the hub gets its own `completed:` line, with the last spoke's date and sha,
+and the hub dir moves to `01-complete/`. A decision made inside one spoke that
 another spoke must honor is copied up to the hub's Decisions at that moment.
 
 **Rules.**
@@ -269,7 +308,7 @@ edit one working tree at once, so each parallel branch gets its own worktree
 at `.agents/worktrees/{plan-name}/`. `reference/worktrees.md` beside this
 file has the setup and the pruning procedure.
 
-Create `~/dev/plans/{repo}/{plan-name}.md` with the `base:` line set to the
+Create `~/dev/plans/{repo}/00-active/{plan-name}/{plan-name}.md` with the `base:` line set to the
 commit the branch left from and Success criteria written. Show the Problem
 draft in chat, take the user's corrections, then write it in. Say that the
 user is next needed at the design review.
@@ -337,8 +376,9 @@ belong there.
 
 When the check ends, print, every run:
 
-> Plan approved at `~/dev/plans/{repo}/{plan-name}.md`. Run `/compact focus on
-> the plan file at ~/dev/plans/{repo}/{plan-name}.md and the pending stages`,
+> Plan approved at `~/dev/plans/{repo}/00-active/{plan-name}/{plan-name}.md`.
+> Run `/compact focus on the plan file at
+> ~/dev/plans/{repo}/00-active/{plan-name}/{plan-name}.md and the pending stages`,
 > then invoke this skill with the argument `implement`.
 
 Build works from the plan file, not from memory of the debate. Say that the user
@@ -401,7 +441,7 @@ then the organizer again with the report. It writes the old-to-new map into
 the Review record under Delegates, and tells the user:
 
 > Series ready on `{branch}`: `[c1]..[cN]`. PR body at
-> `~/dev/plans/{repo}/scratch/{plan-name}/{plan-name}-pr-body-{g}.md`.
+> `~/dev/plans/{repo}/00-active/{plan-name}/scratch/{plan-name}-pr-body-{g}.md`.
 
 Then it waits. The user comes back with the word that the series stands, or
 with comments in chat.
@@ -436,14 +476,16 @@ and the open items in the Review record. A finding that needs more work goes
 one of three ways, and the user picks: a small follow-on becomes a stage in a
 new group at the end of this plan, marked `(independent, next)`, a larger one
 becomes a follow-up plan or a spoke, and an idea with no owner yet goes under
-`future/`.
+`02-future/`.
 
 Then hand off to `commit-flow organize` for the final group, which follows
 End of a group above. Nothing leaves the machine before the user pushes.
 
-When the commits are merged, set `step: merged`, move the plan to
-`archive/unreleased/`, delete `scratch/{plan-name}/`, and update the spoke's
-line in its hub. If a worktree was used, prune it per
+When the commits are merged, set `step: merged`, add
+`completed: {YYYY-MM-DD} {sha}` under it with the merge date and the last
+merged commit, and delete the plan's `scratch/`. A plan with no hub then
+moves its dir to `01-complete/`. A spoke stays in its hub's dir, and its line
+in the hub is updated. If a worktree was used, prune it per
 `reference/worktrees.md`.
 
 ## Working rules
@@ -476,7 +518,7 @@ skill are `orchestration/recon`, `orchestration/critic`,
 and `orchestration/series-reviewer`. The tool lists them. The task is then
 only the inputs, one per line, every path absolute. Every delegate runs with
 `cwd` set to the repo checkout it works in, the main checkout or the
-worktree, because the plan file is outside the repo and the briefs say "the
+worktree, or for a spoke with a `repo:` line that checkout, because the plan file is outside the repo and the briefs say "the
 repo" meaning the working directory. Repo facts such as how to run tests,
 which runner to use, and code style are not inputs: every brief says to read
 the repo's `AGENTS.md`, so they live there.
@@ -485,13 +527,13 @@ the repo's `AGENTS.md`, so they live there.
 brief: orchestration/critic
 cwd: /Users/me/dev/my-repo
 task: |
-  Plan file: /Users/me/dev/plans/my-repo/stash-list.md
+  Plan file: /Users/me/dev/plans/my-repo/00-active/stash-list/stash-list.md
   Half: design
 ```
 
 Never paraphrase a brief into the task, and do not add lists of files to
 read: the plan's Files and Details name them. Delegates write to
-`scratch/{plan-name}/` beside the plan file or to the Review record under
+`scratch/` beside the plan file or to the Review record under
 Delegates. Independent delegates run concurrently, sent in one message.
 Before any user round, send out whatever recon would make the questions
 sharper.

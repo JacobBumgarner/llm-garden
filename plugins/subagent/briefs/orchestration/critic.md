@@ -41,7 +41,7 @@ the path in the repo that raised it.
 
 ## What to write where
 
-Write your questions to `scratch/{plan-name}/critic-{half}.md` beside the
+Write your questions to `scratch/critic-{half}.md` beside the
 plan file, where `{half}` is `design` or `placement` as your task says. The
 plan file lives outside the repo, so this path is outside the repo too. Never
 write to the plan file: another critic runs at the same time, and two writers
