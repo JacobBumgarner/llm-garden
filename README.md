@@ -2,12 +2,10 @@
 A public repo of agent skills, prompts, `pi` extensions, and other preferences I
 have for building software with LLMs.
 
-I am actively experimenting with the process of creating software with LLMs. I observe an
-inverse correlation between the acceleration of work with LLMs and my sense of connectedness
-to the underlying codebase. I'm interested in taking advantage of the
-capabilities of LLMs, but I am not comfortable losing touch with
-the projects I"m building. This repo represent my ever-evolving
-experimentation with this new technology.
+I am actively experimenting with the process of creating software with LLMs. Developing software with LLMs 
+has an inverse relationship between acceleration and my sense of connectedness to the projects I'm building. 
+I'm interested in taking advantage of the capabilities of LLMs, but I am not comfortable losing touch with
+the projects I'm building. This repo represent my ever-evolving experimentation with using this new technology.
 
 Skills in this repo follow the [Agent Skills spec](https://agentskills.io/specification)
 and install into both `pi` and Claude Code.
