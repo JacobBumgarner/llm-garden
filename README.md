@@ -1,8 +1,15 @@
 # llm-garden
-A public repo of skills, agent prompts, `pi` extensions, and other preferences I
+A public repo of agent skills, prompts, `pi` extensions, and other preferences I
 have for building software with LLMs.
 
-Skills follow the [Agent Skills spec](https://agentskills.io/specification)
+I am actively experimenting with the process of creating software with LLMs. I observe an
+inverse correlation between the acceleration of work with LLMs and my sense of connectedness
+to the underlying codebase. I'm interested in taking advantage of the
+capabilities of LLMs, but I am not comfortable losing touch with
+the projects I"m building. This repo represent my ever-evolving
+experimentation with this new technology.
+
+Skills in this repo follow the [Agent Skills spec](https://agentskills.io/specification)
 and install into both `pi` and Claude Code.
 
 These days I am exclusively using the `pi` harness for development work.
@@ -46,13 +53,7 @@ command. The orchestration skill guides the user and agents through a dev
 lifecycle until the work is complete. I organize agent commits with `/commit-flow`,
 which is a built-in step of the orchestration review. 
 
-I am still experimenting with creating software with LLMs. I'm finding an
-inverse correlation with acceleration of work and my sense of connectedness and
-grounding to the underlying codebase. I'm interested in taking advantage of the
-acclerative capabilities of LLMs, but am not comfortable with losing touch of
-the design, code, and organization. These skills represent my ever-evolving
-experimentation with this new technology. There are many other workflows around,
-but this one is mine :) 
+There are many other workflows around, but these are mine :) 
 
 | Plugin | Skill | Details |
 | --- | --- | --- |
