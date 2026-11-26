@@ -46,6 +46,7 @@ plan dir is ever committed anywhere. The repo's git never sees it.
   00-active/
     {plan-name}/
       {plan-name}.md               a plan in flight
+      {plan-name}-report.html      the plan's report, one page
       scratch/                     delegate working material, PR body drafts
     {hub-name}/
       {hub-name}.md                a hub, which has no scratch of its own
@@ -104,6 +105,7 @@ step: a short label  |  merged
 repo: only on a spoke that builds in another repo, the absolute path of that checkout
 completed: added at merge, the date and final commit sha, such as `2025-06-14 9c41e2a`
 base: the commit each stage group left from, with its group, such as `bf208cb (g1)`
+report: the published link to the report, once the host has published it
 
 ## Problem
 agent drafts in chat, user confirms, then it goes in the file
@@ -386,7 +388,7 @@ is next needed at the demo.
 
 ### Build
 
-Background. Three steps per stage, in dependency order, independent stages in
+Background. Four steps per stage, in dependency order, independent stages in
 parallel in their own worktrees.
 
 1. **Implement.** A delegate gets brief `orchestration/implementer`, the plan
@@ -402,6 +404,23 @@ parallel in their own worktrees.
    plan, it edits Details and Decisions in place now, and corrects Files to
    the actual list. A stage whose implementer has started is `in progress`;
    one waiting on a blocking question or a user stage is `blocked`.
+4. **Report.** The orchestrator updates the plan's report,
+   `{plan-name}-report.html` beside the plan file. It is created when the
+   first stage is recorded and rewritten in place at every Record after. It
+   shows:
+   - every stage with its Status, and what runs next
+   - each recorded stage's commit with its Verify and gate results
+   - open risks: each `(open)` question and each `blocked` stage
+   - how to undo each recorded stage: the `git revert` for its commit, and
+     for a deploy stage, how to put the previous version back
+
+   After End of a group, the `[cN]` series replaces the stage commits. The
+   report is one self-contained HTML file that a person can open in any
+   browser without an agent. All CSS is inline and nothing is fetched over the
+   network. It reads in light and dark mode through `prefers-color-scheme`.
+   Where the host can publish a page, such as a claude.ai artifact, publish
+   the report and update the same link each time. The link goes on the plan's
+   `report:` line. A stage is not done until the report shows it.
 
 Verify is a condition both the first two steps must pass, not a step of its own.
 The build never waits for the user, with one exception: a user stage stops the
@@ -472,7 +491,8 @@ Details.
 Then, in session. Go down Success criteria in order. For each, the user runs the
 named command, or sees the script's output, and confirms what appears. After the
 last criterion, list divergences, one line each with the Decision that moved,
-and the open items in the Review record. A finding that needs more work goes
+and the open items in the Review record. Write each criterion's result and
+the divergences into the report. A finding that needs more work goes
 one of three ways, and the user picks: a small follow-on becomes a stage in a
 new group at the end of this plan, marked `(independent, next)`, a larger one
 becomes a follow-up plan or a spoke, and an idea with no owner yet goes under
